@@ -1,0 +1,362 @@
+import Setting from '../models/Setting.js';
+import { createResponse, createErrorResponse } from '../utils/helpers.js';
+import CustomerService from '../services/customerService.js';
+import DeviceService from '../services/deviceService.js';
+import RemoteProxyService from '../services/remoteProxyService.js';
+import CustomerAccount from '../models/CustomerAccount.js';
+
+const ALLOWED_SETTING_KEYS = new Set([
+  'appName',
+  'genieAcsUrl',
+  'autoGenerateCustomerId',
+  'customerIdPrefixMode',
+  'customerIdCompanyPrefix',
+  'customerIdSuffixMode',
+  'vpPppoeUsername',
+  'vpWanBridge',
+  'vpRxPower',
+  'vpTemperature',
+  'vpActiveDevices',
+  'vpSuperAdmin',
+  'vpSuperPassword',
+  'vpUserAdmin',
+  'vpUserPassword',
+  'vpIpTr069',
+  'remoteProxyEnabled',
+  'remoteProxyBaseDomain',
+  'remoteProxyScheme',
+  'remoteProxyDefaultPort',
+  'remoteProxyAuthMode'
+]);
+
+function validateSetting(key, value) {
+  if (!ALLOWED_SETTING_KEYS.has(key)) {
+    return { error: 'Unsupported setting key' };
+  }
+  const normalized = String(value);
+  if (normalized.length > 2048) {
+    return { error: 'Setting value is too long' };
+  }
+  if (key === 'autoGenerateCustomerId' && !['true', 'false'].includes(normalized)) {
+    return { error: 'Auto generation must be true or false' };
+  }
+  if (key === 'remoteProxyEnabled' && !['true', 'false'].includes(normalized)) {
+    return { error: 'Remote proxy enabled must be true or false' };
+  }
+  if (key === 'remoteProxyScheme' && !['http', 'https'].includes(normalized)) {
+    return { error: 'Remote proxy scheme must be http or https' };
+  }
+  if (key === 'remoteProxyAuthMode' && !['none', 'token'].includes(normalized)) {
+    return { error: 'Remote proxy auth mode must be none or token' };
+  }
+  if (key === 'remoteProxyDefaultPort') {
+    const portNum = Number(normalized);
+    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+      return { error: 'Remote proxy default port must be between 1 and 65535' };
+    }
+  }
+  if (key === 'remoteProxyBaseDomain') {
+    const cleaned = normalized.trim().toLowerCase().replace(/^\*\./, '').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    if (cleaned && !/^[a-z0-9.-]+(?::\d{1,5})?$/.test(cleaned)) {
+      return { error: 'Invalid base domain format' };
+    }
+    return { value: cleaned };
+  }
+  if (key === 'customerIdPrefixMode' && !['default', 'company'].includes(normalized)) {
+    return { error: 'Customer ID prefix mode must be default or company' };
+  }
+  if (key === 'customerIdCompanyPrefix' && !/^[A-Za-z]{2,4}$/.test(normalized.trim())) {
+    return { error: 'Company ID must contain 2 to 4 letters' };
+  }
+  if (key === 'customerIdSuffixMode' && !['random', 'installation_date'].includes(normalized)) {
+    return { error: 'Customer ID suffix mode must be random or installation_date' };
+  }
+  if (key === 'appName' && (normalized.trim().length < 1 || normalized.length > 80)) {
+    return { error: 'Application name must be between 1 and 80 characters' };
+  }
+  return { value: normalized };
+}
+
+class SettingsController {
+  static async getAllSettings(req, res) {
+    try {
+      const settings = await Setting.getAll();
+      return res.json(
+        createResponse('Settings retrieved successfully', settings)
+      );
+    } catch (error) {
+      console.error('Get all settings error:', error);
+      return res.status(500).json(
+        createErrorResponse('Failed to get settings', error.message)
+      );
+    }
+  }
+
+  static async getSettingByKey(req, res) {
+    try {
+      const { key } = req.params;
+      
+      if (!key) {
+        return res.status(400).json(
+          createErrorResponse('Setting key is required')
+        );
+      }
+      if (!ALLOWED_SETTING_KEYS.has(key)) {
+        return res.status(404).json(createErrorResponse('Setting not found'));
+      }
+
+      const value = await Setting.getByKey(key);
+      
+      if (value === null) {
+        return res.status(404).json(
+          createErrorResponse('Setting not found')
+        );
+      }
+
+      return res.json(
+        createResponse('Setting retrieved successfully', { [key]: value })
+      );
+    } catch (error) {
+      console.error('Get setting error:', error);
+      return res.status(500).json(
+        createErrorResponse('Failed to get setting', error.message)
+      );
+    }
+  }
+
+  static async createSetting(req, res) {
+    try {
+      const { key, value } = req.body;
+      
+      if (!key || value === undefined || value === null) {
+        return res.status(400).json(
+          createErrorResponse('Key and value are required')
+        );
+      }
+
+      const validated = validateSetting(String(key), value);
+      if (validated.error) {
+        return res.status(400).json(createErrorResponse(validated.error));
+      }
+
+      await Setting.create(key, validated.value);
+      RemoteProxyService.invalidateSettingsCache();
+      return res.json(
+        createResponse('Setting created successfully', { [key]: validated.value })
+      );
+    } catch (error) {
+      console.error('Create setting error:', error);
+      return res.status(500).json(
+        createErrorResponse('Failed to create setting', error.message)
+      );
+    }
+  }
+
+  static async updateSetting(req, res) {
+    try {
+      const { key } = req.params;
+      const { value } = req.body;
+      
+      if (!key || value === undefined || value === null) {
+        return res.status(400).json(
+          createErrorResponse('Key and value are required')
+        );
+      }
+
+      const validated = validateSetting(String(key), value);
+      if (validated.error) {
+        return res.status(400).json(createErrorResponse(validated.error));
+      }
+
+      const updated = await Setting.update(key, validated.value);
+      RemoteProxyService.invalidateSettingsCache();
+      
+      if (!updated) {
+        return res.status(404).json(
+          createErrorResponse('Setting not found')
+        );
+      }
+
+      return res.json(
+        createResponse('Setting updated successfully', { [key]: validated.value })
+      );
+    } catch (error) {
+      console.error('Update setting error:', error);
+      return res.status(500).json(
+        createErrorResponse('Failed to update setting', error.message)
+      );
+    }
+  }
+
+  static async syncCustomerIds(req, res) {
+    try {
+      const enabled = await CustomerService.isAutoGenerationEnabled();
+      if (!enabled) {
+        return res.json(createResponse('Customer ID auto generation is disabled', {
+          enabled: false,
+          total: 0,
+          existing: 0,
+          generated: 0,
+          pending: 0
+        }));
+      }
+      const devices = await DeviceService.getCustomerIdentityDevices();
+      const deviceIds = devices.map((device) => String(device?._id || '')).filter(Boolean);
+      const identityHashes = devices
+        .filter((device) => device?._id && device?.softwareId && device?.pppoe)
+        .map((device) => CustomerService.identityHash(device.softwareId, device.pppoe));
+      const existingRows = await CustomerAccount.getExistingForIdentities(deviceIds, identityHashes);
+      const customerIds = await CustomerService.syncDevices(devices, { enabled: true });
+      const generated = Math.max(customerIds.size - existingRows.length, 0);
+      const preserved = Math.min(existingRows.length, customerIds.size);
+      const pending = Math.max(new Set(deviceIds).size - customerIds.size, 0);
+      return res.json(createResponse(
+        pending
+          ? `Customer IDs synchronized; ${pending} device(s) still need SoftwareID, PPPoE, or installation date`
+          : 'Customer IDs synchronized successfully',
+        {
+          enabled: true,
+          total: deviceIds.length,
+          existing: preserved,
+          generated,
+          pending
+        }
+      ));
+    } catch (error) {
+      console.error('Customer ID sync error:', error);
+      return res.status(502).json(
+        createErrorResponse('Failed to synchronize Customer IDs', error.message)
+      );
+    }
+  }
+
+  static async deleteSetting(req, res) {
+    try {
+      const { key } = req.params;
+      
+      if (!key) {
+        return res.status(400).json(
+          createErrorResponse('Setting key is required')
+        );
+      }
+      if (!ALLOWED_SETTING_KEYS.has(key)) {
+        return res.status(404).json(createErrorResponse('Setting not found'));
+      }
+
+      const deleted = await Setting.delete(key);
+      
+      if (!deleted) {
+        return res.status(404).json(
+          createErrorResponse('Setting not found')
+        );
+      }
+
+      return res.json(
+        createResponse('Setting deleted successfully')
+      );
+    } catch (error) {
+      console.error('Delete setting error:', error);
+      return res.status(500).json(
+        createErrorResponse('Failed to delete setting', error.message)
+      );
+    }
+  }
+
+  static async testGenieAcsConnection(req, res) {
+    try {
+      const { url } = req.body;
+      
+      if (!url) {
+        return res.status(400).json(
+          createErrorResponse('URL is required')
+        );
+      }
+      
+      let testUrl;
+      try {
+        testUrl = new URL(String(url).trim());
+      } catch {
+        return res.status(400).json(
+          createErrorResponse('A valid HTTP or HTTPS URL is required')
+        );
+      }
+
+      if (!['http:', 'https:'].includes(testUrl.protocol)) {
+        return res.status(400).json(
+          createErrorResponse('Only HTTP and HTTPS URLs are supported')
+        );
+      }
+
+      if (testUrl.username || testUrl.password) {
+        return res.status(400).json(
+          createErrorResponse('Credentials in the URL are not supported')
+        );
+      }
+
+      testUrl.pathname = '/devices';
+      testUrl.search = '';
+      testUrl.hash = '';
+      testUrl.searchParams.set('limit', '1');
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      
+      try {
+        const response = await fetch(testUrl, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+          },
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+          return res.status(502).json(
+            createErrorResponse(`GenieACS server returned status ${response.status}`, 'Connection test failed')
+          );
+        }
+        
+        const data = await response.json();
+        
+        if (Array.isArray(data)) {
+          return res.json(
+            createResponse('Connection successful!', {
+              deviceCount: data.length
+            })
+          );
+        } else {
+          return res.json(
+            createResponse('Connection successful, but unexpected response format')
+          );
+        }
+      } catch (error) {
+        clearTimeout(timeoutId);
+        
+        if (error.name === 'AbortError' || error.type === 'request-timeout') {
+          return res.status(504).json(
+            createErrorResponse('Connection timeout - GenieACS server did not respond')
+          );
+        }
+        
+        if (error.code === 'ECONNREFUSED') {
+          return res.status(502).json(
+            createErrorResponse('Connection refused - GenieACS server is not running or URL is incorrect')
+          );
+        }
+        
+        return res.status(502).json(
+          createErrorResponse('Failed to connect to GenieACS server', error.message)
+        );
+      }
+    } catch (error) {
+      console.error('Test GenieACS connection error:', error);
+      return res.status(500).json(
+        createErrorResponse('Internal server error', error.message)
+      );
+    }
+  }
+}
+
+export default SettingsController;

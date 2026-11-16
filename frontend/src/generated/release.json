@@ -1,0 +1,16 @@
+{
+  "version": "1.13.1",
+  "build": 54,
+  "sourceCommit": "5e2c9d576b2c",
+  "releasedAt": "2026-07-26",
+  "basedOnTag": "v1.13.0",
+  "compareUrl": "https://github.com/skydashnet/genieacs-panel/compare/v1.13.0...v1.13.1",
+  "changes": [
+    {
+      "shortHash": "5e2c9d5",
+      "date": "2026-07-26",
+      "title": "Bootstrap legacy CLI updates",
+      "category": "Fixed"
+    }
+  ]
+}
