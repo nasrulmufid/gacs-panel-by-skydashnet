@@ -19,9 +19,9 @@ export const DEFAULT_SETTINGS = {
   vpUserAdmin: '',
   vpUserPassword: '',
   vpIpTr069: 'VirtualParameters.IPTR069',
-  remoteProxyEnabled: 'false',
-  remoteProxyBaseDomain: '',
-  remoteProxyScheme: 'https',
+  remoteProxyEnabled: process.env.REMOTE_PROXY_ENABLED || 'false',
+  remoteProxyBaseDomain: process.env.REMOTE_PROXY_BASE_DOMAIN || '',
+  remoteProxyScheme: process.env.REMOTE_PROXY_SCHEME || 'https',
   remoteProxyDefaultPort: '80',
   remoteProxyAuthMode: 'token'
 };

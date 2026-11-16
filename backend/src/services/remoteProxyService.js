@@ -8,11 +8,30 @@ import DeviceService from './deviceService.js';
 const RESERVED_SUBDOMAINS = new Set(['www', 'panel', 'portal', 'acs', 'cwmp', 'nbi', 'fs', 'api', 'admin', 'mail', 'ns1', 'ns2']);
 const RESERVED_SUBDOMAIN_PREFIXES = ['panel-', 'portal-', 'acs-', 'cwmp-', 'nbi-', 'fs-'];
 
+function detectInstanceName() {
+  const explicit = String(process.env.INSTANCE_NAME || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+  if (explicit) return explicit;
+  const cors = String(process.env.CORS_ORIGINS || '');
+  const match = cors.match(/\/\/panel-([a-z0-9_-]+)\./i);
+  return match ? match[1].toLowerCase() : '';
+}
+
+const INSTANCE_NAME = detectInstanceName();
+
 function isReservedSubdomain(sub) {
   if (!sub) return true;
   const lower = String(sub).toLowerCase();
   if (RESERVED_SUBDOMAINS.has(lower)) return true;
   return RESERVED_SUBDOMAIN_PREFIXES.some((prefix) => lower.startsWith(prefix));
+}
+
+function stripInstanceSuffix(sub, instanceName = INSTANCE_NAME) {
+  if (!sub || !instanceName) return sub;
+  const suffix = `-${instanceName.toLowerCase()}`;
+  if (sub.toLowerCase().endsWith(suffix) && sub.length > suffix.length) {
+    return sub.slice(0, -suffix.length);
+  }
+  return sub;
 }
 const COOKIE_NAME = '__sgp_remote_session';
 const QUERY_PARAM = '__sgp_rt';
@@ -147,95 +166,111 @@ class RemoteProxyService {
     // Support <serial>.localhost for local testing
     if (hostname.endsWith('.localhost')) {
       const sub = hostname.slice(0, -'.localhost'.length);
-        if (sub && !sub.includes('.') && !isReservedSubdomain(sub)) {
-          return sub;
-        }
+      if (sub && !sub.includes('.') && !isReservedSubdomain(sub)) {
+        return stripInstanceSuffix(sub);
       }
+    }
 
-      if (!baseDomain) return null;
-      const baseHostname = baseDomain.replace(/:\d+$/, '').toLowerCase();
-      const suffix = `.${baseHostname}`;
-      if (!hostname.endsWith(suffix)) return null;
+    if (!baseDomain) return null;
+    const baseHostname = baseDomain.replace(/:\d+$/, '').toLowerCase();
+    const suffix = `.${baseHostname}`;
+    if (!hostname.endsWith(suffix)) return null;
 
-      const sub = hostname.slice(0, -suffix.length);
-        if (!sub || sub.includes('.') || isReservedSubdomain(sub)) {
-          return null;
-        }
-        return sub;
-      }
+  const sub = hostname.slice(0, -suffix.length);
+  if(!sub || sub.includes('.') || isReservedSubdomain(sub)) {
+  return null;
+}
+return stripInstanceSuffix(sub);
+  }
+
+  static resolveInstanceSuffix(requestHost, baseDomain) {
+  if (INSTANCE_NAME) return `-${INSTANCE_NAME}`;
+  if (!requestHost || !baseDomain) return '';
+  const hostClean = String(requestHost).split(',')[0].trim().toLowerCase().replace(/:\d+$/, '');
+  const baseClean = String(baseDomain).trim().toLowerCase().replace(/:\d+$/, '');
+  const suffix = `.${baseClean}`;
+  if (hostClean.startsWith('panel-') && hostClean.endsWith(suffix)) {
+    const inst = hostClean.slice('panel-'.length, -suffix.length);
+    if (inst && !inst.includes('.')) return `-${inst}`;
+  }
+  return '';
+}
 
   static buildRemoteUrl({ serialOrId, baseDomain, scheme, requestHost, ticket, authMode }) {
-    const subdomain = this.sanitizeSubdomainLabel(serialOrId);
-    if (!subdomain) return null;
+  const subdomain = this.sanitizeSubdomainLabel(serialOrId);
+  if (!subdomain) return null;
 
-    let targetHost;
-    let targetScheme = scheme || 'https';
-    if (baseDomain) {
-      targetHost = `${subdomain}.${baseDomain}`;
-    } else if (requestHost) {
-      const portPart = String(requestHost).includes(':') ? `:${String(requestHost).split(':')[1]}` : '';
-      targetHost = `${subdomain}.localhost${portPart}`;
-      targetScheme = 'http';
-    } else {
-      return null;
-    }
+  const instanceSuffix = this.resolveInstanceSuffix(requestHost, baseDomain);
+  const hostLabel = `${subdomain}${instanceSuffix}`;
 
-    const baseUrl = `${targetScheme}://${targetHost}`;
-    if (authMode === 'token' && ticket) {
-      return `${baseUrl}/?${QUERY_PARAM}=${encodeURIComponent(ticket)}`;
-    }
-    return baseUrl;
+  let targetHost;
+  let targetScheme = scheme || 'https';
+  if (baseDomain) {
+    targetHost = `${hostLabel}.${baseDomain}`;
+  } else if (requestHost) {
+    const portPart = String(requestHost).includes(':') ? `:${String(requestHost).split(':')[1]}` : '';
+    targetHost = `${hostLabel}.localhost${portPart}`;
+    targetScheme = 'http';
+  } else {
+    return null;
   }
+
+  const baseUrl = `${targetScheme}://${targetHost}`;
+  if (authMode === 'token' && ticket) {
+    return `${baseUrl}/?${QUERY_PARAM}=${encodeURIComponent(ticket)}`;
+  }
+  return baseUrl;
+}
 
   static async resolveDeviceTargetBySubdomain(subdomain) {
-    const key = String(subdomain).toUpperCase();
-    const now = Date.now();
-    const cached = this.targetCache.get(key);
-    if (cached && now < cached.expiresAt) {
-      return cached.value;
-    }
-
-    const devices = await DeviceService.getDevices();
-    const matched = devices.find((dev) => {
-      const sn = this.sanitizeSubdomainLabel(dev.SerialNumber);
-      const idLabel = this.sanitizeSubdomainLabel(dev._id);
-      return (sn && sn.toUpperCase() === key) || (idLabel && idLabel.toUpperCase() === key);
-    });
-
-    if (!matched) {
-      return null;
-    }
-
-    const profile = await DeviceProfile.getByDeviceId(matched._id);
-    const settings = await this.getProxySettings();
-
-    const targetIp = DeviceService.extractIpv4(profile?.remote_ip_override) || matched.ipTr069;
-    const port = Number(profile?.remote_port) || settings.defaultPort || 80;
-    const protocol = profile?.remote_protocol === 'https' ? 'https' : 'http';
-
-    if (!targetIp || !this.isSafeTargetIp(targetIp, port)) {
-      return null;
-    }
-
-    const value = {
-      deviceId: matched._id,
-      serialNumber: matched.SerialNumber || matched._id,
-      targetIp,
-      port,
-      protocol
-    };
-
-    this.targetCache.set(key, {
-      value,
-      expiresAt: now + 60_000
-    });
-
-    return value;
+  const key = String(subdomain).toUpperCase();
+  const now = Date.now();
+  const cached = this.targetCache.get(key);
+  if (cached && now < cached.expiresAt) {
+    return cached.value;
   }
 
+  const devices = await DeviceService.getDevices();
+  const matched = devices.find((dev) => {
+    const sn = this.sanitizeSubdomainLabel(dev.SerialNumber);
+    const idLabel = this.sanitizeSubdomainLabel(dev._id);
+    return (sn && sn.toUpperCase() === key) || (idLabel && idLabel.toUpperCase() === key);
+  });
+
+  if (!matched) {
+    return null;
+  }
+
+  const profile = await DeviceProfile.getByDeviceId(matched._id);
+  const settings = await this.getProxySettings();
+
+  const targetIp = DeviceService.extractIpv4(profile?.remote_ip_override) || matched.ipTr069;
+  const port = Number(profile?.remote_port) || settings.defaultPort || 80;
+  const protocol = profile?.remote_protocol === 'https' ? 'https' : 'http';
+
+  if (!targetIp || !this.isSafeTargetIp(targetIp, port)) {
+    return null;
+  }
+
+  const value = {
+    deviceId: matched._id,
+    serialNumber: matched.SerialNumber || matched._id,
+    targetIp,
+    port,
+    protocol
+  };
+
+  this.targetCache.set(key, {
+    value,
+    expiresAt: now + 60_000
+  });
+
+  return value;
+}
+
   static renderErrorPage(res, status, title, message) {
-    res.status(status).setHeader('Content-Type', 'text/html; charset=utf-8');
-    return res.send(`<!doctype html>
+  res.status(status).setHeader('Content-Type', 'text/html; charset=utf-8');
+  return res.send(`<!doctype html>
 <html lang="id">
 <head>
   <meta charset="utf-8" />
@@ -258,221 +293,221 @@ class RemoteProxyService {
   </div>
 </body>
 </html>`);
-  }
+}
 
   static createMiddleware() {
-    return async (req, res, next) => {
-      try {
-        const rawHost = req.headers['x-forwarded-host'] || req.headers.host;
-        const settings = await this.getProxySettings();
-        const subdomain = this.extractSubdomainFromHost(rawHost, settings.baseDomain);
+  return async (req, res, next) => {
+    try {
+      const rawHost = req.headers['x-forwarded-host'] || req.headers.host;
+      const settings = await this.getProxySettings();
+      const subdomain = this.extractSubdomainFromHost(rawHost, settings.baseDomain);
 
-        if (!subdomain) {
-          return next();
-        }
+      if (!subdomain) {
+        return next();
+      }
 
-        if (!settings.enabled) {
-          return this.renderErrorPage(
-            res,
-            503,
-            'Remote Device Proxy Nonaktif',
-            'Fitur Remote Device Proxy sedang dinonaktifkan di pengaturan SkyGenPanel.'
-          );
-        }
-
-        // Check query parameter ticket handshake (?__sgp_rt=<token>)
-        const parsedUrl = new URL(req.originalUrl || req.url, `http://${rawHost}`);
-        const incomingTicket = parsedUrl.searchParams.get(QUERY_PARAM);
-        if (incomingTicket) {
-          const verified = this.verifyTicket(incomingTicket, subdomain);
-          if (!verified) {
-            return this.renderErrorPage(
-              res,
-              403,
-              'Token Remote Tidak Valid atau Kedaluwarsa',
-              'Silakan buka ulang sesi Remote Device dari halaman SkyGenPanel.'
-            );
-          }
-          if (this.isSafeTargetIp(verified.targetIp, verified.port)) {
-            this.targetCache.set(String(subdomain).toUpperCase(), {
-              value: {
-                deviceId: verified.deviceId,
-                serialNumber: subdomain.toUpperCase(),
-                targetIp: verified.targetIp,
-                port: Number(verified.port) || 80,
-                protocol: verified.protocol === 'https' ? 'https' : 'http'
-              },
-              expiresAt: Date.now() + 8 * 3600_000
-            });
-          }
-          parsedUrl.searchParams.delete(QUERY_PARAM);
-          const cleanPath = `${parsedUrl.pathname}${parsedUrl.search}`;
-          res.setHeader(
-            'Set-Cookie',
-            `${COOKIE_NAME}=${encodeURIComponent(incomingTicket)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=28800`
-          );
-          return res.redirect(302, cleanPath || '/');
-        }
-
-        let ticketPayload = null;
-        if (settings.authMode === 'token') {
-          const cookies = parseCookies(req.headers.cookie);
-          const sessionToken = cookies[COOKIE_NAME];
-          ticketPayload = this.verifyTicket(sessionToken, subdomain);
-          if (!ticketPayload) {
-            return this.renderErrorPage(
-              res,
-              403,
-              'Akses Remote Memerlukan Sesi Operator',
-              'Subdomain perangkat ini dilindungi. Buka SkyGenPanel lalu klik tombol "Remote Device" pada perangkat untuk memulai sesi.'
-            );
-          }
-        }
-
-        let target = null;
-        if (ticketPayload && this.isSafeTargetIp(ticketPayload.targetIp, ticketPayload.port)) {
-          target = {
-            deviceId: ticketPayload.deviceId,
-            serialNumber: subdomain.toUpperCase(),
-            targetIp: ticketPayload.targetIp,
-            port: Number(ticketPayload.port) || 80,
-            protocol: ticketPayload.protocol === 'https' ? 'https' : 'http'
-          };
-        } else {
-          target = await this.resolveDeviceTargetBySubdomain(subdomain);
-        }
-
-        if (!target || !this.isSafeTargetIp(target.targetIp, target.port)) {
-          return this.renderErrorPage(
-            res,
-            404,
-            `Target IP TR-069 Tidak Ditemukan (${subdomain.toUpperCase()})`,
-            'Perangkat belum melaporkan IP TR-069 / WAN yang valid ke GenieACS.'
-          );
-        }
-
-        return this.proxyToDevice(req, res, target, rawHost);
-      } catch (error) {
-        console.error('Remote proxy error:', error);
+      if (!settings.enabled) {
         return this.renderErrorPage(
           res,
-          502,
-          'Gagal Menghubungi Perangkat',
-          error instanceof Error ? error.message : 'Terjadi kesalahan pada layanan reverse proxy.'
+          503,
+          'Remote Device Proxy Nonaktif',
+          'Fitur Remote Device Proxy sedang dinonaktifkan di pengaturan SkyGenPanel.'
         );
       }
-    };
-  }
 
-  static proxyToDevice(req, res, target, publicHost) {
-    const upstreamOrigin = `${target.protocol}://${target.targetIp}${(target.protocol === 'http' && target.port === 80) || (target.protocol === 'https' && target.port === 443)
-        ? ''
-        : `:${target.port}`
-      }`;
-    const upstreamHostHeader =
-      (target.protocol === 'http' && target.port === 80) || (target.protocol === 'https' && target.port === 443)
-        ? target.targetIp
-        : `${target.targetIp}:${target.port}`;
+      // Check query parameter ticket handshake (?__sgp_rt=<token>)
+      const parsedUrl = new URL(req.originalUrl || req.url, `http://${rawHost}`);
+      const incomingTicket = parsedUrl.searchParams.get(QUERY_PARAM);
+      if (incomingTicket) {
+        const verified = this.verifyTicket(incomingTicket, subdomain);
+        if (!verified) {
+          return this.renderErrorPage(
+            res,
+            403,
+            'Token Remote Tidak Valid atau Kedaluwarsa',
+            'Silakan buka ulang sesi Remote Device dari halaman SkyGenPanel.'
+          );
+        }
+        if (this.isSafeTargetIp(verified.targetIp, verified.port)) {
+          this.targetCache.set(String(subdomain).toUpperCase(), {
+            value: {
+              deviceId: verified.deviceId,
+              serialNumber: subdomain.toUpperCase(),
+              targetIp: verified.targetIp,
+              port: Number(verified.port) || 80,
+              protocol: verified.protocol === 'https' ? 'https' : 'http'
+            },
+            expiresAt: Date.now() + 8 * 3600_000
+          });
+        }
+        parsedUrl.searchParams.delete(QUERY_PARAM);
+        const cleanPath = `${parsedUrl.pathname}${parsedUrl.search}`;
+        res.setHeader(
+          'Set-Cookie',
+          `${COOKIE_NAME}=${encodeURIComponent(incomingTicket)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=28800`
+        );
+        return res.redirect(302, cleanPath || '/');
+      }
 
-    const forwardedHeaders = { ...req.headers };
-    delete forwardedHeaders['x-forwarded-host'];
-    delete forwardedHeaders['x-forwarded-proto'];
-    delete forwardedHeaders['x-forwarded-for'];
-    delete forwardedHeaders['sec-fetch-site'];
-    delete forwardedHeaders['sec-fetch-mode'];
-    delete forwardedHeaders['sec-fetch-dest'];
-    delete forwardedHeaders['sec-fetch-user'];
-    forwardedHeaders.host = upstreamHostHeader;
+      let ticketPayload = null;
+      if (settings.authMode === 'token') {
+        const cookies = parseCookies(req.headers.cookie);
+        const sessionToken = cookies[COOKIE_NAME];
+        ticketPayload = this.verifyTicket(sessionToken, subdomain);
+        if (!ticketPayload) {
+          return this.renderErrorPage(
+            res,
+            403,
+            'Akses Remote Memerlukan Sesi Operator',
+            'Subdomain perangkat ini dilindungi. Buka SkyGenPanel lalu klik tombol "Remote Device" pada perangkat untuk memulai sesi.'
+          );
+        }
+      }
 
-    // Strip internal __sgp_remote_session cookie before sending to ONT
-    if (forwardedHeaders.cookie) {
-      const filteredCookies = String(forwardedHeaders.cookie)
-        .split(';')
-        .map((c) => c.trim())
-        .filter((c) => !c.startsWith(`${COOKIE_NAME}=`));
-      if (filteredCookies.length) {
-        forwardedHeaders.cookie = filteredCookies.join('; ');
+      let target = null;
+      if (ticketPayload && this.isSafeTargetIp(ticketPayload.targetIp, ticketPayload.port)) {
+        target = {
+          deviceId: ticketPayload.deviceId,
+          serialNumber: subdomain.toUpperCase(),
+          targetIp: ticketPayload.targetIp,
+          port: Number(ticketPayload.port) || 80,
+          protocol: ticketPayload.protocol === 'https' ? 'https' : 'http'
+        };
       } else {
-        delete forwardedHeaders.cookie;
-      }
-    }
-
-    // Rewrite Origin & Referer so ONT web UI CSRF checks pass
-    if (forwardedHeaders.origin) {
-      forwardedHeaders.origin = upstreamOrigin;
-    }
-    if (forwardedHeaders.referer) {
-      try {
-        const refUrl = new URL(forwardedHeaders.referer);
-        forwardedHeaders.referer = `${upstreamOrigin}${refUrl.pathname}${refUrl.search}`;
-      } catch {
-        forwardedHeaders.referer = `${upstreamOrigin}/`;
-      }
-    }
-
-    const transport = target.protocol === 'https' ? https : http;
-    const options = {
-      hostname: target.targetIp,
-      port: target.port,
-      path: req.originalUrl || req.url || '/',
-      method: req.method,
-      headers: forwardedHeaders,
-      timeout: 15_000,
-      ...(target.protocol === 'https' ? { rejectUnauthorized: false } : {})
-    };
-
-    const proxyReq = transport.request(options, (proxyRes) => {
-      const responseHeaders = { ...proxyRes.headers };
-      delete responseHeaders['x-frame-options'];
-      delete responseHeaders['content-security-policy'];
-      delete responseHeaders['content-security-policy-report-only'];
-
-      // Rewrite Location header if ONT redirects to its private IP
-      if (responseHeaders.location) {
-        const loc = String(responseHeaders.location);
-        const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
-        const publicOrigin = `${proto}://${publicHost}`;
-        responseHeaders.location = loc
-          .replace(`http://${target.targetIp}:${target.port}`, publicOrigin)
-          .replace(`https://${target.targetIp}:${target.port}`, publicOrigin)
-          .replace(`http://${target.targetIp}`, publicOrigin)
-          .replace(`https://${target.targetIp}`, publicOrigin);
+        target = await this.resolveDeviceTargetBySubdomain(subdomain);
       }
 
-      // Normalize Set-Cookie from ONT so browser stores it on the subdomain
-      if (responseHeaders['set-cookie']) {
-        const rawCookies = Array.isArray(responseHeaders['set-cookie'])
-          ? responseHeaders['set-cookie']
-          : [String(responseHeaders['set-cookie'])];
-        responseHeaders['set-cookie'] = rawCookies.map((cookieStr) =>
-          cookieStr
-            .replace(/;\s*Domain=[^;]+/gi, '')
-            .replace(/;\s*Secure/gi, '')
+      if (!target || !this.isSafeTargetIp(target.targetIp, target.port)) {
+        return this.renderErrorPage(
+          res,
+          404,
+          `Target IP TR-069 Tidak Ditemukan (${subdomain.toUpperCase()})`,
+          'Perangkat belum melaporkan IP TR-069 / WAN yang valid ke GenieACS.'
         );
       }
 
-      res.writeHead(proxyRes.statusCode || 200, responseHeaders);
-      proxyRes.pipe(res);
-    });
-
-    proxyReq.on('timeout', () => {
-      proxyReq.destroy(new Error(`Connection timed out to ${target.targetIp}:${target.port}`));
-    });
-
-    proxyReq.on('error', (err) => {
-      if (res.headersSent) {
-        return res.end();
-      }
+      return this.proxyToDevice(req, res, target, rawHost);
+    } catch (error) {
+      console.error('Remote proxy error:', error);
       return this.renderErrorPage(
         res,
         502,
-        `ONT Web UI Tidak Merespons (${target.targetIp}:${target.port})`,
-        `Pastikan ONT online, rute jaringan TR-069 dari server SkyGenPanel ke ${target.targetIp}:${target.port} terbuka, dan HTTP WAN Access pada ONT aktif. (${err.message})`
+        'Gagal Menghubungi Perangkat',
+        error instanceof Error ? error.message : 'Terjadi kesalahan pada layanan reverse proxy.'
       );
-    });
+    }
+  };
+}
 
-    req.pipe(proxyReq);
+  static proxyToDevice(req, res, target, publicHost) {
+  const upstreamOrigin = `${target.protocol}://${target.targetIp}${(target.protocol === 'http' && target.port === 80) || (target.protocol === 'https' && target.port === 443)
+    ? ''
+    : `:${target.port}`
+    }`;
+  const upstreamHostHeader =
+    (target.protocol === 'http' && target.port === 80) || (target.protocol === 'https' && target.port === 443)
+      ? target.targetIp
+      : `${target.targetIp}:${target.port}`;
+
+  const forwardedHeaders = { ...req.headers };
+  delete forwardedHeaders['x-forwarded-host'];
+  delete forwardedHeaders['x-forwarded-proto'];
+  delete forwardedHeaders['x-forwarded-for'];
+  delete forwardedHeaders['sec-fetch-site'];
+  delete forwardedHeaders['sec-fetch-mode'];
+  delete forwardedHeaders['sec-fetch-dest'];
+  delete forwardedHeaders['sec-fetch-user'];
+  forwardedHeaders.host = upstreamHostHeader;
+
+  // Strip internal __sgp_remote_session cookie before sending to ONT
+  if (forwardedHeaders.cookie) {
+    const filteredCookies = String(forwardedHeaders.cookie)
+      .split(';')
+      .map((c) => c.trim())
+      .filter((c) => !c.startsWith(`${COOKIE_NAME}=`));
+    if (filteredCookies.length) {
+      forwardedHeaders.cookie = filteredCookies.join('; ');
+    } else {
+      delete forwardedHeaders.cookie;
+    }
   }
+
+  // Rewrite Origin & Referer so ONT web UI CSRF checks pass
+  if (forwardedHeaders.origin) {
+    forwardedHeaders.origin = upstreamOrigin;
+  }
+  if (forwardedHeaders.referer) {
+    try {
+      const refUrl = new URL(forwardedHeaders.referer);
+      forwardedHeaders.referer = `${upstreamOrigin}${refUrl.pathname}${refUrl.search}`;
+    } catch {
+      forwardedHeaders.referer = `${upstreamOrigin}/`;
+    }
+  }
+
+  const transport = target.protocol === 'https' ? https : http;
+  const options = {
+    hostname: target.targetIp,
+    port: target.port,
+    path: req.originalUrl || req.url || '/',
+    method: req.method,
+    headers: forwardedHeaders,
+    timeout: 15_000,
+    ...(target.protocol === 'https' ? { rejectUnauthorized: false } : {})
+  };
+
+  const proxyReq = transport.request(options, (proxyRes) => {
+    const responseHeaders = { ...proxyRes.headers };
+    delete responseHeaders['x-frame-options'];
+    delete responseHeaders['content-security-policy'];
+    delete responseHeaders['content-security-policy-report-only'];
+
+    // Rewrite Location header if ONT redirects to its private IP
+    if (responseHeaders.location) {
+      const loc = String(responseHeaders.location);
+      const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+      const publicOrigin = `${proto}://${publicHost}`;
+      responseHeaders.location = loc
+        .replace(`http://${target.targetIp}:${target.port}`, publicOrigin)
+        .replace(`https://${target.targetIp}:${target.port}`, publicOrigin)
+        .replace(`http://${target.targetIp}`, publicOrigin)
+        .replace(`https://${target.targetIp}`, publicOrigin);
+    }
+
+    // Normalize Set-Cookie from ONT so browser stores it on the subdomain
+    if (responseHeaders['set-cookie']) {
+      const rawCookies = Array.isArray(responseHeaders['set-cookie'])
+        ? responseHeaders['set-cookie']
+        : [String(responseHeaders['set-cookie'])];
+      responseHeaders['set-cookie'] = rawCookies.map((cookieStr) =>
+        cookieStr
+          .replace(/;\s*Domain=[^;]+/gi, '')
+          .replace(/;\s*Secure/gi, '')
+      );
+    }
+
+    res.writeHead(proxyRes.statusCode || 200, responseHeaders);
+    proxyRes.pipe(res);
+  });
+
+  proxyReq.on('timeout', () => {
+    proxyReq.destroy(new Error(`Connection timed out to ${target.targetIp}:${target.port}`));
+  });
+
+  proxyReq.on('error', (err) => {
+    if (res.headersSent) {
+      return res.end();
+    }
+    return this.renderErrorPage(
+      res,
+      502,
+      `ONT Web UI Tidak Merespons (${target.targetIp}:${target.port})`,
+      `Pastikan ONT online, rute jaringan TR-069 dari server SkyGenPanel ke ${target.targetIp}:${target.port} terbuka, dan HTTP WAN Access pada ONT aktif. (${err.message})`
+    );
+  });
+
+  req.pipe(proxyReq);
+}
 }
 
 export default RemoteProxyService;
