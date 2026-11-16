@@ -16,6 +16,7 @@ ENV APP_ENV=production \
 
 WORKDIR /app/backend
 COPY backend/package*.json ./
+COPY backend/scripts ./scripts
 RUN npm ci --omit=dev
 COPY backend/ ./
 COPY --from=frontend-build /app/frontend/dist /app/frontend/dist
