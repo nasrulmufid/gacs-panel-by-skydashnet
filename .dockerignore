@@ -1,0 +1,15 @@
+**/node_modules
+**/dist
+.git
+.agents
+.agent
+GACS-Farm
+docs
+backend/.env
+backend/.env.*
+!backend/.env.example
+backend/data
+**/*.sqlite
+**/*.sqlite3
+**/*.db
+**/*.log

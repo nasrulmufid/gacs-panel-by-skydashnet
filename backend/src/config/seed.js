@@ -2,7 +2,9 @@ import { getDb } from './database.js';
 
 export const DEFAULT_SETTINGS = {
   appName: 'SkyGenPanel',
-  genieAcsUrl: '',
+  // Optional bootstrap value (e.g. injected by GACS-Farm). Only applied when
+  // the setting does not exist yet; later edits from Settings are preserved.
+  genieAcsUrl: process.env.GENIEACS_URL || '',
   autoGenerateCustomerId: 'false',
   customerIdPrefixMode: 'default',
   customerIdCompanyPrefix: 'CSG',

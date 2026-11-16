@@ -13,10 +13,7 @@ logs/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-<<<<<<< HEAD
 .agent/
-=======
->>>>>>> 6cec4d391656462b390632b6250d180230118590
 
 # Build
 dist/
