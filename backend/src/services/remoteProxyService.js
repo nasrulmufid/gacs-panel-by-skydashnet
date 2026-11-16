@@ -5,7 +5,15 @@ import Setting from '../models/Setting.js';
 import DeviceProfile from '../models/DeviceProfile.js';
 import DeviceService from './deviceService.js';
 
-const RESERVED_SUBDOMAINS = new Set(['www', 'panel', 'portal', 'acs', 'api', 'admin', 'mail', 'ns1', 'ns2']);
+const RESERVED_SUBDOMAINS = new Set(['www', 'panel', 'portal', 'acs', 'cwmp', 'nbi', 'fs', 'api', 'admin', 'mail', 'ns1', 'ns2']);
+const RESERVED_SUBDOMAIN_PREFIXES = ['panel-', 'portal-', 'acs-', 'cwmp-', 'nbi-', 'fs-'];
+
+function isReservedSubdomain(sub) {
+  if (!sub) return true;
+  const lower = String(sub).toLowerCase();
+  if (RESERVED_SUBDOMAINS.has(lower)) return true;
+  return RESERVED_SUBDOMAIN_PREFIXES.some((prefix) => lower.startsWith(prefix));
+}
 const COOKIE_NAME = '__sgp_remote_session';
 const QUERY_PARAM = '__sgp_rt';
 
@@ -139,22 +147,22 @@ class RemoteProxyService {
     // Support <serial>.localhost for local testing
     if (hostname.endsWith('.localhost')) {
       const sub = hostname.slice(0, -'.localhost'.length);
-      if (sub && !sub.includes('.') && !RESERVED_SUBDOMAINS.has(sub)) {
+        if (sub && !sub.includes('.') && !isReservedSubdomain(sub)) {
+          return sub;
+        }
+      }
+
+      if (!baseDomain) return null;
+      const baseHostname = baseDomain.replace(/:\d+$/, '').toLowerCase();
+      const suffix = `.${baseHostname}`;
+      if (!hostname.endsWith(suffix)) return null;
+
+      const sub = hostname.slice(0, -suffix.length);
+        if (!sub || sub.includes('.') || isReservedSubdomain(sub)) {
+          return null;
+        }
         return sub;
       }
-    }
-
-    if (!baseDomain) return null;
-    const baseHostname = baseDomain.replace(/:\d+$/, '').toLowerCase();
-    const suffix = `.${baseHostname}`;
-    if (!hostname.endsWith(suffix)) return null;
-
-    const sub = hostname.slice(0, -suffix.length);
-    if (!sub || sub.includes('.') || RESERVED_SUBDOMAINS.has(sub)) {
-      return null;
-    }
-    return sub;
-  }
 
   static buildRemoteUrl({ serialOrId, baseDomain, scheme, requestHost, ticket, authMode }) {
     const subdomain = this.sanitizeSubdomainLabel(serialOrId);
@@ -357,11 +365,10 @@ class RemoteProxyService {
   }
 
   static proxyToDevice(req, res, target, publicHost) {
-    const upstreamOrigin = `${target.protocol}://${target.targetIp}${
-      (target.protocol === 'http' && target.port === 80) || (target.protocol === 'https' && target.port === 443)
+    const upstreamOrigin = `${target.protocol}://${target.targetIp}${(target.protocol === 'http' && target.port === 80) || (target.protocol === 'https' && target.port === 443)
         ? ''
         : `:${target.port}`
-    }`;
+      }`;
     const upstreamHostHeader =
       (target.protocol === 'http' && target.port === 80) || (target.protocol === 'https' && target.port === 443)
         ? target.targetIp
