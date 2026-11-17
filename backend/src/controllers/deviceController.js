@@ -97,6 +97,14 @@ class DeviceController {
         authMode: 'none'
       });
 
+      const hasLocation =
+        profile?.latitude !== null &&
+        profile?.latitude !== undefined &&
+        profile?.longitude !== null &&
+        profile?.longitude !== undefined &&
+        Number.isFinite(Number(profile.latitude)) &&
+        Number.isFinite(Number(profile.longitude));
+
       return res.json(
         createResponse('Device detail retrieved successfully', {
           ...deviceDetail,
@@ -105,6 +113,12 @@ class DeviceController {
             installationDate: profile?.installation_date || null,
             generated: Boolean(account)
           },
+          location: hasLocation
+            ? {
+                latitude: Number(profile.latitude),
+                longitude: Number(profile.longitude)
+              }
+            : null,
           remoteAccess: {
             enabled: proxySettings.enabled,
             baseDomain: proxySettings.baseDomain,
@@ -275,6 +289,56 @@ class DeviceController {
       const status = error.message === 'Device not found' ? 404 : 502;
       return res.status(status).json(
         createErrorResponse('Failed to save installation date', error.message)
+      );
+    }
+  }
+
+  static async updateLocation(req, res) {
+    const { id } = req.params;
+    const { latitude, longitude } = req.body || {};
+
+    if (!id) {
+      return res.status(400).json(createErrorResponse('Device ID is required'));
+    }
+
+    try {
+      if (latitude === null && longitude === null) {
+        await DeviceProfile.upsertLocation(id, null, null);
+        return res.json(createResponse('Lokasi perangkat dihapus', { location: null }));
+      }
+
+      const lat = Number(latitude);
+      const lng = Number(longitude);
+      if (
+        latitude === '' ||
+        longitude === '' ||
+        latitude === undefined ||
+        longitude === undefined ||
+        !Number.isFinite(lat) ||
+        lat < -90 ||
+        lat > 90 ||
+        !Number.isFinite(lng) ||
+        lng < -180 ||
+        lng > 180
+      ) {
+        return res.status(400).json(
+          createErrorResponse('Koordinat latitude (-90..90) dan longitude (-180..180) harus valid')
+        );
+      }
+
+      const profile = await DeviceProfile.upsertLocation(id, lat, lng);
+      return res.json(
+        createResponse('Lokasi perangkat berhasil disimpan', {
+          location: {
+            latitude: Number(profile.latitude),
+            longitude: Number(profile.longitude)
+          }
+        })
+      );
+    } catch (error) {
+      console.error(`Error saving location for ${id}:`, error);
+      return res.status(500).json(
+        createErrorResponse('Failed to save device location', error.message)
       );
     }
   }

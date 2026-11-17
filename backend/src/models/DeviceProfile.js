@@ -45,6 +45,36 @@ class DeviceProfile {
     }
     return this.getByDeviceId(deviceId);
   }
+
+  static async getLocationsByDeviceIds(deviceIds = []) {
+    if (!Array.isArray(deviceIds) || deviceIds.length === 0) return [];
+    return getDb()('device_profiles')
+      .whereIn('device_id', deviceIds)
+      .whereNotNull('latitude')
+      .whereNotNull('longitude')
+      .select('device_id', 'latitude', 'longitude');
+  }
+
+  static async upsertLocation(deviceId, latitude, longitude) {
+    const db = getDb();
+    const existing = await this.getByDeviceId(deviceId);
+    const clearing = latitude === null || longitude === null;
+    const values = {
+      latitude: clearing ? null : Number(latitude),
+      longitude: clearing ? null : Number(longitude),
+      updated_at: new Date()
+    };
+    if (existing) {
+      await db('device_profiles').where({ device_id: deviceId }).update(values);
+    } else {
+      await db('device_profiles').insert({
+        device_id: deviceId,
+        ...values,
+        created_at: new Date()
+      });
+    }
+    return this.getByDeviceId(deviceId);
+  }
 }
 
 export default DeviceProfile;

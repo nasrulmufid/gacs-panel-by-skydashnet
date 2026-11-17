@@ -229,6 +229,12 @@ export const devicesAPI = {
   updateInstallationDate: (deviceId: string, installationDate: string) =>
     apiClient.put(`/devices/${encodeURIComponent(deviceId)}/installation-date`, { installationDate }),
 
+  updateLocation: (deviceId: string, location: { latitude: number | null; longitude: number | null }) =>
+    apiClient.put<{ location: { latitude: number; longitude: number } | null }>(
+      `/devices/${encodeURIComponent(deviceId)}/location`,
+      location
+    ),
+
   updateWifiConfig: (deviceId: string, index: number, formData: any) => {
     return apiClient.post(`/devices/${encodeURIComponent(deviceId)}/update-wifi`, { index, formData });
   },

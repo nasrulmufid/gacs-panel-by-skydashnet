@@ -15,6 +15,7 @@ router.post('/summon', authenticateToken, requireRole(['admin']), DeviceControll
 router.post('/:id/update-wan', authenticateToken, requireRole(['admin']), DeviceController.updateWanConfig);
 router.post('/:id/add-wan', authenticateToken, requireRole(['admin']), DeviceController.addWanConnection);
 router.put('/:id/installation-date', authenticateToken, requireRole(['admin']), DeviceController.updateInstallationDate);
+router.put('/:id/location', authenticateToken, requireRole(['admin']), DeviceController.updateLocation);
 router.post('/:id/update-wifi', authenticateToken, requireRole(['admin']), DeviceController.updateWifiConfig);
 router.post('/:id/update-credentials', authenticateToken, requireRole(['admin']), DeviceController.updateCredentials);
 router.post('/:id/remote-session', authenticateToken, requireRole(['admin']), DeviceController.prepareRemoteSession);

@@ -1,9 +1,12 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router'
 import { useAuth } from '@/contexts/auth-context'
 import { useTheme } from '@/contexts/theme-context'
-import { mappingAPI, mapSettingsAPI } from '@/lib/api'
+import { devicesAPI, mappingAPI, mapSettingsAPI } from '@/lib/api'
+import { copyToClipboard, formatDate } from '@/lib/utils'
+import type { Device } from '@/types'
 import { Icon } from '@/components/ui/icon'
 import { useToast } from '@/components/ui/toast'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -84,6 +87,32 @@ interface MapEdge {
 
 type NodeForm = Omit<MapNode, 'id'>
 type EdgeForm = Omit<MapEdge, 'id'>
+type PinnedLiveDevice = Device & { latitude: number; longitude: number }
+
+function isDeviceOnline(lastInform?: string) {
+  if (!lastInform) return false
+  const ms = new Date(lastInform).getTime()
+  if (!Number.isFinite(ms)) return false
+  const ageMs = Date.now() - ms
+  return ageMs >= 0 && ageMs < 10 * 60 * 1000
+}
+
+function getDeviceSsids(device: Device) {
+  const ssids = [
+    device.ssid1,
+    device.ssid2,
+    device.ssid3,
+    device.ssid4,
+    device.ssid5,
+    device.ssid6,
+    device.ssid7,
+    device.ssid8,
+  ]
+    .map((val) => (typeof val === 'string' ? val.trim() : ''))
+    .filter(Boolean)
+  const unique = Array.from(new Set(ssids))
+  return unique.length > 0 ? unique.join(', ') : '—'
+}
 
 const NODE_TYPES: { value: NodeType; label: string }[] = [
   { value: 'htb', label: 'HTB' },
@@ -439,12 +468,18 @@ function EdgeEditor({
 }
 
 export default function NetworkMap() {
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const focusDeviceId = searchParams.get('device') || ''
   const [nodes, setNodes] = useState<MapNode[]>([])
   const [edges, setEdges] = useState<MapEdge[]>([])
+  const [liveDevices, setLiveDevices] = useState<PinnedLiveDevice[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [selectedNode, setSelectedNode] = useState<MapNode | null>(null)
   const [selectedEdge, setSelectedEdge] = useState<MapEdge | null>(null)
+  const [selectedLiveDevice, setSelectedLiveDevice] = useState<PinnedLiveDevice | null>(null)
+  const [showLiveDevices, setShowLiveDevices] = useState(true)
   const [nodeEditor, setNodeEditor] = useState<NodeForm | null>(null)
   const [edgeEditor, setEdgeEditor] = useState<EdgeForm | null>(null)
   const [editingNode, setEditingNode] = useState(false)
@@ -467,9 +502,11 @@ export default function NetworkMap() {
   const mapRef = useRef<any>(null)
   const markersLayerRef = useRef<any>(null)
   const cablesLayerRef = useRef<any>(null)
+  const devicesLayerRef = useRef<any>(null)
   const tileLayerRef = useRef<any>(null)
   const leafletRef = useRef<any>(null)
   const hasCenteredAssetsRef = useRef(false)
+  const focusedDeviceHandledRef = useRef('')
 
   const normalizeNodes = (data: unknown): MapNode[] =>
     (Array.isArray(data) ? data : []).map((raw: any) => ({
@@ -497,15 +534,44 @@ export default function NetworkMap() {
       notes: raw.notes || null,
     }))
 
+  const normalizeLiveDevices = (data: unknown): PinnedLiveDevice[] =>
+    (Array.isArray(data) ? data : [])
+      .filter((raw: any) => (
+        raw &&
+        raw.latitude !== null &&
+        raw.latitude !== undefined &&
+        raw.longitude !== null &&
+        raw.longitude !== undefined &&
+        Number.isFinite(Number(raw.latitude)) &&
+        Number.isFinite(Number(raw.longitude))
+      ))
+      .map((raw: any) => ({
+        ...(raw as Device),
+        latitude: Number(raw.latitude),
+        longitude: Number(raw.longitude),
+      }))
+
   const loadData = useCallback(async (withSettings = true) => {
     try {
       setLoading(true)
-      const requests: Promise<any>[] = [mappingAPI.getNodes(), mappingAPI.getEdges()]
+      const requests: Promise<any>[] = [
+        mappingAPI.getNodes(),
+        mappingAPI.getEdges(),
+        devicesAPI.getDevices().catch(() => ({ success: false, data: [] })),
+      ]
       if (withSettings) requests.push(mapSettingsAPI.get())
-      const [nodesRes, edgesRes, settingsRes] = await Promise.all(requests)
+      const [nodesRes, edgesRes, devicesRes, settingsRes] = await Promise.all(requests)
       if (!nodesRes.success || !edgesRes.success) throw new Error('Topology data could not be loaded')
       setNodes(normalizeNodes(nodesRes.data))
       setEdges(normalizeEdges(edgesRes.data))
+      if (devicesRes?.success) {
+        const nextLive = normalizeLiveDevices(devicesRes.data)
+        setLiveDevices(nextLive)
+        setSelectedLiveDevice((current) => {
+          if (!current) return null
+          return nextLive.find((d) => d._id === current._id) || current
+        })
+      }
       const settings = settingsRes?.data as any
       if (settings) {
         const center: [number, number] = [Number(settings.center_lat), Number(settings.center_lng)]
@@ -532,6 +598,7 @@ export default function NetworkMap() {
     mapRef.current = null
     markersLayerRef.current = null
     cablesLayerRef.current = null
+    devicesLayerRef.current = null
     tileLayerRef.current = null
   }, [])
 
@@ -550,8 +617,10 @@ export default function NetworkMap() {
     if (!L || !map) return
     markersLayerRef.current ||= L.layerGroup().addTo(map)
     cablesLayerRef.current ||= L.layerGroup().addTo(map)
+    devicesLayerRef.current ||= L.layerGroup().addTo(map)
     markersLayerRef.current.clearLayers()
     cablesLayerRef.current.clearLayers()
+    devicesLayerRef.current.clearLayers()
 
     const byId = new Map(nodes.map((node) => [node.node_id, node]))
     edges.forEach((edge) => {
@@ -571,7 +640,7 @@ export default function NetworkMap() {
         dashArray: edge.fiber_type === 'drop' ? '7 7' : undefined,
       }).addTo(cablesLayerRef.current)
       line.bindTooltip(`<strong>${escapeHtml(edge.edge_id)}</strong><br>${escapeHtml(meta.label)} · ${escapeHtml(edge.source)} → ${escapeHtml(edge.target)}`)
-      line.on('click', () => { setSelectedEdge(edge); setSelectedNode(null) })
+      line.on('click', () => { setSelectedEdge(edge); setSelectedNode(null); setSelectedLiveDevice(null) })
     })
 
     nodes.forEach((node) => {
@@ -581,20 +650,55 @@ export default function NetworkMap() {
         icon: L.divIcon({ className: '', html, iconSize: [28, 28], iconAnchor: [14, 14] })
       }).addTo(markersLayerRef.current)
       marker.bindTooltip(`<strong>${escapeHtml(node.name)}</strong><br>${escapeHtml(getTypeLabel(node.type))} · ${escapeHtml(node.node_id)}`)
-      marker.on('click', () => { setSelectedNode(node); setSelectedEdge(null) })
+      marker.on('click', () => { setSelectedNode(node); setSelectedEdge(null); setSelectedLiveDevice(null) })
     })
-    if (nodes.length && !hasCenteredAssetsRef.current) {
-      const center = nodes.reduce(
-        (total, node) => [total[0] + node.latitude, total[1] + node.longitude] as [number, number],
+
+    if (showLiveDevices) {
+      liveDevices.forEach((dev) => {
+        const online = isDeviceOnline(dev._lastInform)
+        const bg = online ? '#10b981' : '#ef4444'
+        const halo = online ? 'rgba(16,185,129,0.28)' : 'rgba(239,68,68,0.24)'
+        const html = `<div style="width:28px;height:28px;border-radius:9999px;background:${bg};border:2px solid #ffffff;box-shadow:0 0 0 4px ${halo},0 2px 6px rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center;color:#ffffff"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="19.5" r="1"/></svg></div>`
+        const marker = L.marker([dev.latitude, dev.longitude], {
+          icon: L.divIcon({ className: '', html, iconSize: [28, 28], iconAnchor: [14, 14] }),
+          zIndexOffset: 250,
+        }).addTo(devicesLayerRef.current)
+        const label = escapeHtml(dev.SerialNumber || dev._id)
+        const pppoeLabel = escapeHtml(dev.pppoe || '—')
+        marker.bindTooltip(
+          `<strong>${label}</strong><br>${online ? '● Online' : '○ Offline'} · PPPoE: ${pppoeLabel}`
+        )
+        marker.on('click', () => {
+          setSelectedLiveDevice(dev)
+          setSelectedNode(null)
+          setSelectedEdge(null)
+        })
+      })
+    }
+
+    if (focusDeviceId && focusedDeviceHandledRef.current !== focusDeviceId) {
+      const target = liveDevices.find((dev) => dev._id === focusDeviceId)
+      if (target) {
+        map.setView([target.latitude, target.longitude], Math.min(maxZoom, 17))
+        setSelectedLiveDevice(target)
+        focusedDeviceHandledRef.current = focusDeviceId
+        hasCenteredAssetsRef.current = true
+      }
+    }
+
+    const centerSource = nodes.length ? nodes : (showLiveDevices ? liveDevices : [])
+    if (centerSource.length && !hasCenteredAssetsRef.current) {
+      const center = centerSource.reduce(
+        (total, item) => [total[0] + item.latitude, total[1] + item.longitude] as [number, number],
         [0, 0] as [number, number]
       )
       map.setView(
-        [center[0] / nodes.length, center[1] / nodes.length],
+        [center[0] / centerSource.length, center[1] / centerSource.length],
         Math.min(maxZoom, Math.max(minZoom, 15))
       )
       hasCenteredAssetsRef.current = true
     }
-  }, [edges, isDarkMode, maxZoom, minZoom, nodes])
+  }, [edges, focusDeviceId, isDarkMode, liveDevices, maxZoom, minZoom, nodes, showLiveDevices])
 
   useEffect(() => {
     if (mapView !== 'map') return
@@ -610,16 +714,17 @@ export default function NetworkMap() {
         mapRef.current = L.map(mapContainerRef.current, { center: mapCenter, zoom: defaultZoom, minZoom, maxZoom })
         markersLayerRef.current = L.layerGroup().addTo(mapRef.current)
         cablesLayerRef.current = L.layerGroup().addTo(mapRef.current)
+        devicesLayerRef.current = L.layerGroup().addTo(mapRef.current)
         updateTileLayer()
       }
       mapRef.current.setMinZoom(minZoom)
       mapRef.current.setMaxZoom(maxZoom)
-      if (!nodes.length) mapRef.current.setView(mapCenter, defaultZoom)
+      if (!nodes.length && !liveDevices.length) mapRef.current.setView(mapCenter, defaultZoom)
       updateMapObjects()
       window.setTimeout(() => mapRef.current?.invalidateSize(), 80)
     })()
     return () => { cancelled = true }
-  }, [defaultZoom, mapCenter, mapView, maxZoom, minZoom, nodes.length, updateMapObjects, updateTileLayer])
+  }, [defaultZoom, liveDevices.length, mapCenter, mapView, maxZoom, minZoom, nodes.length, updateMapObjects, updateTileLayer])
   useEffect(() => { if (mapRef.current) updateTileLayer() }, [updateTileLayer])
   useEffect(() => { if (mapRef.current) updateMapObjects() }, [updateMapObjects])
 
@@ -707,6 +812,10 @@ export default function NetworkMap() {
   const nodeCounts = useMemo(() => NODE_TYPES.map((type) => ({
     ...type, count: nodes.filter((node) => node.type === type.value).length
   })), [nodes])
+  const onlineLiveCount = useMemo(
+    () => liveDevices.filter((dev) => isDeviceOnline(dev._lastInform)).length,
+    [liveDevices]
+  )
 
   return (
     <div className="page-shell">
@@ -715,7 +824,7 @@ export default function NetworkMap() {
           <div>
             <p className="page-kicker">Outside plant</p>
             <h1 className="page-title">Network topology</h1>
-            <p className="page-description">Kelola HTB, OLT, ODC, ODP, ONT, dan jalur kabel fiber langsung pada peta.</p>
+            <p className="page-description">Kelola HTB, OLT, ODC, ODP, ONT, jalur kabel fiber, serta pantau titik live device langsung pada peta.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {isAdmin && (
@@ -737,7 +846,7 @@ export default function NetworkMap() {
           </div>
         </header>
 
-        <section className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
+        <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 sm:gap-4">
           <Card>
             <CardHeader className="pb-2"><CardDescription className="metric-label">Nodes</CardDescription></CardHeader>
             <CardContent><p className="metric-value mt-0">{nodes.length}</p></CardContent>
@@ -751,18 +860,41 @@ export default function NetworkMap() {
             <CardContent><p className="metric-value mt-0">{nodes.filter((n) => n.type === 'olt' || n.type === 'odc').length}</p></CardContent>
           </Card>
           <Card>
+            <CardHeader className="pb-2"><CardDescription className="metric-label">Live Devices</CardDescription></CardHeader>
+            <CardContent>
+              <p className="metric-value mt-0">
+                {liveDevices.length}
+                <span className="ml-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                  ({onlineLiveCount} online)
+                </span>
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
             <CardHeader className="pb-2"><CardDescription className="metric-label">Last refresh</CardDescription></CardHeader>
             <CardContent><p className="font-mono text-sm font-semibold">{lastRefresh?.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) || '—'}</p></CardContent>
           </Card>
         </section>
 
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             {nodeCounts.map((entry) => (
               <Badge key={entry.value} variant="secondary" className="font-mono">
                 {entry.label} {entry.count}
               </Badge>
             ))}
+            <button
+              type="button"
+              onClick={() => setShowLiveDevices((prev) => !prev)}
+              className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-0.5 font-mono text-xs font-semibold transition-colors ${
+                showLiveDevices
+                  ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                  : 'border-border bg-muted text-muted-foreground'
+              }`}
+            >
+              <span className={`size-2 rounded-full ${showLiveDevices ? 'bg-emerald-500' : 'bg-muted-foreground'}`} />
+              LIVE ONT {liveDevices.length}
+            </button>
           </div>
           <Tabs value={mapView} onValueChange={(value) => setMapView(value as 'map' | 'list')}>
             <TabsList>
@@ -777,7 +909,7 @@ export default function NetworkMap() {
             <CardHeader className="flex flex-col gap-3 border-b border-border py-3.5 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <CardTitle className="text-base">Physical fiber map</CardTitle>
-                <CardDescription>Click a node or cable to inspect and edit it.</CardDescription>
+                <CardDescription>Click a node, fiber cable, or live device marker (hijau = online, merah = offline) to inspect details.</CardDescription>
               </div>
               <Tabs
                 value={basemap}
@@ -982,6 +1114,122 @@ export default function NetworkMap() {
             </DialogFooter>
           </ModalShell>
         )}
+
+        {selectedLiveDevice && (() => {
+          const online = isDeviceOnline(selectedLiveDevice._lastInform)
+          const ssids = getDeviceSsids(selectedLiveDevice)
+          return (
+            <ModalShell
+              title={`Live Device · ${selectedLiveDevice.SerialNumber || selectedLiveDevice._id}`}
+              onClose={() => setSelectedLiveDevice(null)}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/40 px-3.5 py-2.5">
+                <div className="flex items-center gap-2">
+                  <span className={`size-2.5 rounded-full ${online ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                  <Badge className={online ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30' : 'bg-red-500/15 text-red-700 dark:text-red-300 border border-red-500/30'}>
+                    {online ? 'Online' : 'Offline'}
+                  </Badge>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  Last Inform: {selectedLiveDevice._lastInform ? formatDate(selectedLiveDevice._lastInform) : '—'}
+                </span>
+              </div>
+
+              <dl className="mt-2 grid gap-4 sm:grid-cols-2">
+                <div>
+                  <dt className="metric-label">Serial Number (SN)</dt>
+                  <dd className="mt-1 flex items-center gap-1.5 font-mono text-sm font-semibold">
+                    <span className="break-all">{selectedLiveDevice.SerialNumber || '—'}</span>
+                    {selectedLiveDevice.SerialNumber && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => void copyToClipboard(selectedLiveDevice.SerialNumber!).then((ok) => ok && toast.success('SN disalin'))}
+                      >
+                        Copy
+                      </Button>
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="metric-label">Device ID</dt>
+                  <dd className="mt-1 flex items-center gap-1.5 font-mono text-xs">
+                    <span className="break-all">{selectedLiveDevice._id}</span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => void copyToClipboard(selectedLiveDevice._id).then((ok) => ok && toast.success('Device ID disalin'))}
+                    >
+                      Copy
+                    </Button>
+                  </dd>
+                </div>
+                <div>
+                  <dt className="metric-label">IP TR-069</dt>
+                  <dd className="mt-1 flex items-center gap-1.5 font-mono text-sm text-primary">
+                    <span>{selectedLiveDevice.ipTr069 || '—'}</span>
+                    {selectedLiveDevice.ipTr069 && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => void copyToClipboard(selectedLiveDevice.ipTr069!).then((ok) => ok && toast.success('IP TR-069 disalin'))}
+                      >
+                        Copy
+                      </Button>
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="metric-label">PPPoE Username</dt>
+                  <dd className="mt-1 flex items-center gap-1.5 font-mono text-sm">
+                    <span className="break-all">{selectedLiveDevice.pppoe || '—'}</span>
+                    {selectedLiveDevice.pppoe && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => void copyToClipboard(selectedLiveDevice.pppoe!).then((ok) => ok && toast.success('PPPoE disalin'))}
+                      >
+                        Copy
+                      </Button>
+                    )}
+                  </dd>
+                </div>
+                <div className="sm:col-span-2">
+                  <dt className="metric-label">SSID</dt>
+                  <dd className="mt-1 break-all font-mono text-sm">{ssids}</dd>
+                </div>
+                <div className="sm:col-span-2">
+                  <dt className="metric-label">Coordinates</dt>
+                  <dd className="mt-1 font-mono text-xs text-muted-foreground">
+                    {selectedLiveDevice.latitude.toFixed(6)}, {selectedLiveDevice.longitude.toFixed(6)}
+                  </dd>
+                </div>
+              </dl>
+
+              <DialogFooter className="mt-4 gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    const id = selectedLiveDevice._id
+                    setSelectedLiveDevice(null)
+                    navigate(`/devices/detail?id=${encodeURIComponent(id)}`)
+                  }}
+                >
+                  <Icon name="external" size={16} />
+                  Detail Perangkat
+                </Button>
+                <Button type="button" onClick={() => setSelectedLiveDevice(null)}>
+                  Tutup
+                </Button>
+              </DialogFooter>
+            </ModalShell>
+          )
+        })()}
 
         {nodeEditor && <NodeEditor initial={nodeEditor} editing={editingNode} saving={saving} onClose={() => setNodeEditor(null)} onSave={(value) => void saveNode(value)} />}
         {edgeEditor && <EdgeEditor initial={edgeEditor} nodes={nodes} editing={editingEdge} saving={saving} onClose={() => setEdgeEditor(null)} onSave={(value) => void saveEdge(value)} />}

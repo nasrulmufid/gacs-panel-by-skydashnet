@@ -174,11 +174,28 @@ class CustomerService {
   }
 
   static async decorateDevices(devices) {
-    const customerIds = await this.syncDevices(devices);
-    return devices.map((device) => ({
-      ...device,
-      customerId: customerIds.get(String(device._id)) || null
-    }));
+    const deviceIds = devices.map((device) => String(device?._id || '')).filter(Boolean);
+    const [customerIds, locationRows] = await Promise.all([
+      this.syncDevices(devices),
+      DeviceProfile.getLocationsByDeviceIds(deviceIds)
+    ]);
+    const locations = new Map(
+      locationRows
+        .filter((row) => Number.isFinite(Number(row.latitude)) && Number.isFinite(Number(row.longitude)))
+        .map((row) => [
+          row.device_id,
+          { latitude: Number(row.latitude), longitude: Number(row.longitude) }
+        ])
+    );
+    return devices.map((device) => {
+      const loc = locations.get(String(device._id)) || null;
+      return {
+        ...device,
+        customerId: customerIds.get(String(device._id)) || null,
+        latitude: loc ? loc.latitude : null,
+        longitude: loc ? loc.longitude : null
+      };
+    });
   }
 }
 

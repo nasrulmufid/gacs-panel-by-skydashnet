@@ -1,13 +1,17 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { useToast } from '@/components/ui/toast'
 import { useLoading } from '@/components/ui/loading'
-import { devicesAPI } from '@/lib/api'
+import { devicesAPI, mapSettingsAPI } from '@/lib/api'
 import { copyToClipboard, formatDate } from '@/lib/utils'
 import { Icon } from '@/components/ui/icon'
 import { useAuth } from '@/contexts/auth-context'
+import { useTheme } from '@/contexts/theme-context'
+import 'leaflet/dist/leaflet.css'
+
+const leafletModulePromise = import('leaflet')
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -94,6 +98,10 @@ interface ProcessedDeviceDetail {
     installationDate: string | null;
     generated: boolean;
   };
+  location?: {
+    latitude: number;
+    longitude: number;
+  } | null;
   remoteAccess?: {
     enabled: boolean;
     baseDomain: string;
@@ -611,6 +619,470 @@ function EditWifiModal({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function getPickerTileConfig(basemap: 'osm' | 'google', dark: boolean) {
+  if (basemap === 'google') {
+    return {
+      url: 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&hl=id&gl=id',
+      attribution: 'Map data &copy; Google'
+    }
+  }
+  if (dark) {
+    return {
+      url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+      attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+    }
+  }
+  return {
+    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '&copy; OpenStreetMap contributors'
+  }
+}
+
+function DeviceMapLocationCard({
+  device,
+  isAdmin,
+  onLocationSaved,
+  onOpenNetworkMap,
+}: {
+  device: ProcessedDeviceDetail
+  isAdmin: boolean
+  onLocationSaved: (location: { latitude: number; longitude: number } | null) => void
+  onOpenNetworkMap: () => void
+}) {
+  const { isDarkMode } = useTheme()
+  const toast = useToast()
+
+  const [basemap, setBasemap] = useState<'osm' | 'google'>(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('networkMapBasemap') : null
+    return saved === 'google' ? 'google' : 'osm'
+  })
+  const [mapCenter, setMapCenter] = useState<[number, number]>(() =>
+    device.location ? [device.location.latitude, device.location.longitude] : [-6.2088, 106.8456]
+  )
+  const [defaultZoom, setDefaultZoom] = useState(() => (device.location ? 16 : 13))
+  const [minZoom, setMinZoom] = useState(5)
+  const [maxZoom, setMaxZoom] = useState(18)
+  const [draftLocation, setDraftLocation] = useState<{ latitude: number; longitude: number } | null>(
+    device.location || null
+  )
+  const [confirmSaveOpen, setConfirmSaveOpen] = useState(false)
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [locating, setLocating] = useState(false)
+
+  const mapContainerRef = useRef<HTMLDivElement | null>(null)
+  const mapRef = useRef<any>(null)
+  const markerRef = useRef<any>(null)
+  const tileLayerRef = useRef<any>(null)
+  const leafletRef = useRef<any>(null)
+  const initialLocationRef = useRef(device.location || null)
+  const isAdminRef = useRef(isAdmin)
+
+  useEffect(() => {
+    isAdminRef.current = isAdmin
+  }, [isAdmin])
+
+  useEffect(() => {
+    setDraftLocation(device.location || null)
+    initialLocationRef.current = device.location || null
+  }, [device._id, device.location])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await mapSettingsAPI.get()
+        if (cancelled || !res.success || !res.data) return
+        const s = res.data as any
+        const nextMin = Number.isFinite(Number(s.max_zoom_out)) ? Number(s.max_zoom_out) : 5
+        const nextMax = Number.isFinite(Number(s.max_zoom_in)) ? Number(s.max_zoom_in) : 18
+        const nextZoom = Number.isFinite(Number(s.default_zoom)) ? Number(s.default_zoom) : 13
+        setMinZoom(nextMin)
+        setMaxZoom(nextMax)
+        if (!initialLocationRef.current) {
+          const lat = Number(s.center_lat)
+          const lng = Number(s.center_lng)
+          if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            setMapCenter([lat, lng])
+            setDefaultZoom(nextZoom)
+            mapRef.current?.setView([lat, lng], nextZoom)
+          }
+        }
+      } catch {
+        // Default center remains active when map settings cannot be loaded.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const updateTileLayer = useCallback(() => {
+    const L = leafletRef.current
+    const map = mapRef.current
+    if (!L || !map) return
+    if (tileLayerRef.current) {
+      map.removeLayer(tileLayerRef.current)
+    }
+    const tile = getPickerTileConfig(basemap, isDarkMode)
+    tileLayerRef.current = L.tileLayer(tile.url, { attribution: tile.attribution }).addTo(map)
+  }, [basemap, isDarkMode])
+
+  const syncMarker = useCallback((loc: { latitude: number; longitude: number } | null) => {
+    const L = leafletRef.current
+    const map = mapRef.current
+    if (!L || !map) return
+
+    if (!loc) {
+      if (markerRef.current) {
+        map.removeLayer(markerRef.current)
+        markerRef.current = null
+      }
+      return
+    }
+
+    const iconHtml = `<div style="width:32px;height:32px;display:flex;align-items:center;justify-content:center;border-radius:9999px;background:#0ea5e9;border:3px solid #ffffff;box-shadow:0 3px 10px rgba(0,0,0,.35);color:#ffffff"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-6-5.33-6-10a6 6 0 1 1 12 0c0 4.67-6 10-6 10z"/><circle cx="12" cy="11" r="2.2"/></svg></div>`
+    const icon = L.divIcon({ className: '', html: iconHtml, iconSize: [32, 32], iconAnchor: [16, 32] })
+
+    if (markerRef.current) {
+      markerRef.current.setLatLng([loc.latitude, loc.longitude])
+      markerRef.current.setIcon(icon)
+    } else {
+      const marker = L.marker([loc.latitude, loc.longitude], {
+        icon,
+        draggable: isAdminRef.current,
+      }).addTo(map)
+      marker.on('dragend', () => {
+        const pos = marker.getLatLng()
+        setDraftLocation({
+          latitude: Number(pos.lat.toFixed(6)),
+          longitude: Number(pos.lng.toFixed(6)),
+        })
+      })
+      markerRef.current = marker
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      if (!leafletRef.current) {
+        const module = await leafletModulePromise
+        leafletRef.current = (module as any).default ?? module
+      }
+      if (cancelled || !mapContainerRef.current) return
+      const L = leafletRef.current
+      if (!mapRef.current) {
+        const initialCenter: [number, number] = initialLocationRef.current
+          ? [initialLocationRef.current.latitude, initialLocationRef.current.longitude]
+          : mapCenter
+        const initialZoom = initialLocationRef.current ? Math.min(maxZoom, 16) : defaultZoom
+        const map = L.map(mapContainerRef.current, {
+          center: initialCenter,
+          zoom: initialZoom,
+          minZoom,
+          maxZoom,
+        })
+        map.on('click', (event: any) => {
+          if (!isAdminRef.current) return
+          const { lat, lng } = event.latlng
+          setDraftLocation({
+            latitude: Number(lat.toFixed(6)),
+            longitude: Number(lng.toFixed(6)),
+          })
+        })
+        mapRef.current = map
+        updateTileLayer()
+        syncMarker(initialLocationRef.current)
+        window.setTimeout(() => mapRef.current?.invalidateSize(), 100)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (!mapRef.current) return
+    mapRef.current.setMinZoom(minZoom)
+    mapRef.current.setMaxZoom(maxZoom)
+  }, [minZoom, maxZoom])
+
+  useEffect(() => {
+    if (mapRef.current) updateTileLayer()
+  }, [updateTileLayer])
+
+  useEffect(() => {
+    if (mapRef.current) syncMarker(draftLocation)
+  }, [draftLocation, syncMarker])
+
+  useEffect(() => () => {
+    mapRef.current?.remove()
+    mapRef.current = null
+    markerRef.current = null
+    tileLayerRef.current = null
+  }, [])
+
+  const handleUseCurrentGps = () => {
+    if (!navigator.geolocation) {
+      toast.error('Browser tidak mendukung geolokasi GPS')
+      return
+    }
+    setLocating(true)
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const next = {
+          latitude: Number(pos.coords.latitude.toFixed(6)),
+          longitude: Number(pos.coords.longitude.toFixed(6)),
+        }
+        setDraftLocation(next)
+        mapRef.current?.setView([next.latitude, next.longitude], Math.min(maxZoom, 17))
+        setLocating(false)
+      },
+      (err) => {
+        toast.error(`Gagal mengambil lokasi GPS: ${err.message}`)
+        setLocating(false)
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    )
+  }
+
+  const handleConfirmSave = async () => {
+    if (!draftLocation) return
+    setConfirmSaveOpen(false)
+    setSaving(true)
+    try {
+      const res = await devicesAPI.updateLocation(device._id, draftLocation)
+      if (!res.success) {
+        toast.error(res.message || 'Gagal menyimpan lokasi perangkat')
+        return
+      }
+      const saved = res.data?.location || draftLocation
+      onLocationSaved(saved)
+      toast.success(res.message || 'Lokasi perangkat berhasil disimpan')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Gagal menyimpan lokasi perangkat')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleConfirmDelete = async () => {
+    setConfirmDeleteOpen(false)
+    setSaving(true)
+    try {
+      const res = await devicesAPI.updateLocation(device._id, { latitude: null, longitude: null })
+      if (!res.success) {
+        toast.error(res.message || 'Gagal menghapus lokasi perangkat')
+        return
+      }
+      setDraftLocation(null)
+      onLocationSaved(null)
+      toast.success(res.message || 'Lokasi perangkat dihapus')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Gagal menghapus lokasi perangkat')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const hasUnsavedChange = Boolean(
+    draftLocation &&
+    (!device.location ||
+      Math.abs(draftLocation.latitude - device.location.latitude) > 1e-6 ||
+      Math.abs(draftLocation.longitude - device.location.longitude) > 1e-6)
+  )
+
+  return (
+    <div className="modern-card p-5 sm:p-6 lg:col-span-2">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Map Location</h2>
+            {device.location ? (
+              <Badge variant="secondary" className="font-mono text-xs">
+                Pinned · {device.location.latitude.toFixed(6)}, {device.location.longitude.toFixed(6)}
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="text-xs">Belum ditandai</Badge>
+            )}
+            {hasUnsavedChange && (
+              <Badge className="bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">
+                Belum disimpan
+              </Badge>
+            )}
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {isAdmin
+              ? 'Klik titik pada peta (atau geser pin) untuk menandai lokasi perangkat, lalu konfirmasi dan simpan agar tampil di Network Map.'
+              : 'Lokasi koordinat perangkat yang tercatat pada peta jaringan.'}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Tabs
+            value={basemap}
+            onValueChange={(value) => {
+              const next = value as 'osm' | 'google'
+              setBasemap(next)
+              localStorage.setItem('networkMapBasemap', next)
+            }}
+          >
+            <TabsList>
+              <TabsTrigger value="osm">OSM</TabsTrigger>
+              <TabsTrigger value="google">Google</TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {device.location && (
+            <Button type="button" variant="outline" size="sm" onClick={onOpenNetworkMap}>
+              <Icon name="map" size={16} />
+              Lihat di Map
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="relative h-72 w-full overflow-hidden rounded-md border border-border sm:h-80">
+        <div ref={mapContainerRef} className="h-full w-full" />
+      </div>
+
+      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="grid grid-cols-2 gap-3 sm:max-w-md flex-1">
+          <div>
+            <Label htmlFor="device-lat" className="text-xs text-muted-foreground">Latitude</Label>
+            <Input
+              id="device-lat"
+              type="number"
+              step="any"
+              min={-90}
+              max={90}
+              readOnly={!isAdmin}
+              className="mt-1 font-mono text-sm"
+              placeholder="-6.208800"
+              value={draftLocation ? String(draftLocation.latitude) : ''}
+              onChange={(e) => {
+                if (e.target.value.trim() === '') return
+                const val = Number(e.target.value)
+                if (!Number.isFinite(val) || val < -90 || val > 90) return
+                setDraftLocation((prev) => ({
+                  latitude: val,
+                  longitude: prev?.longitude ?? mapCenter[1],
+                }))
+              }}
+            />
+          </div>
+          <div>
+            <Label htmlFor="device-lng" className="text-xs text-muted-foreground">Longitude</Label>
+            <Input
+              id="device-lng"
+              type="number"
+              step="any"
+              min={-180}
+              max={180}
+              readOnly={!isAdmin}
+              className="mt-1 font-mono text-sm"
+              placeholder="106.845600"
+              value={draftLocation ? String(draftLocation.longitude) : ''}
+              onChange={(e) => {
+                if (e.target.value.trim() === '') return
+                const val = Number(e.target.value)
+                if (!Number.isFinite(val) || val < -180 || val > 180) return
+                setDraftLocation((prev) => ({
+                  latitude: prev?.latitude ?? mapCenter[0],
+                  longitude: val,
+                }))
+              }}
+            />
+          </div>
+        </div>
+
+        {isAdmin && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={locating || saving}
+              onClick={handleUseCurrentGps}
+            >
+              {locating ? <Spinner data-icon="inline-start" /> : <Icon name="pin" size={16} />}
+              {locating ? 'Mencari GPS…' : 'Gunakan GPS'}
+            </Button>
+            {device.location && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={saving}
+                onClick={() => setConfirmDeleteOpen(true)}
+              >
+                <Icon name="trash" size={16} />
+                Hapus Titik
+              </Button>
+            )}
+            <Button
+              type="button"
+              size="sm"
+              disabled={saving || !draftLocation}
+              onClick={() => setConfirmSaveOpen(true)}
+            >
+              {saving ? <Spinner data-icon="inline-start" /> : <Icon name="check" size={16} />}
+              {saving ? 'Menyimpan…' : 'Konfirmasi & Simpan Lokasi'}
+            </Button>
+          </div>
+        )}
+      </div>
+
+      <AlertDialog open={confirmSaveOpen} onOpenChange={setConfirmSaveOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Konfirmasi Titik Lokasi Perangkat</AlertDialogTitle>
+            <AlertDialogDescription>
+              Pastikan titik pin pada peta untuk perangkat{' '}
+              <strong className="font-mono text-foreground">
+                {device.deviceInfo?.serialNumber || device._id}
+              </strong>{' '}
+              sudah tepat di koordinat{' '}
+              <strong className="font-mono text-foreground">
+                {draftLocation?.latitude.toFixed(6)}, {draftLocation?.longitude.toFixed(6)}
+              </strong>{' '}
+              sebelum disimpan ke Network Map?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Periksa Lagi</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void handleConfirmSave()}>
+              Ya, Titik Sudah Tepat &amp; Simpan
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hapus Titik Lokasi Perangkat?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Titik perangkat{' '}
+              <strong className="font-mono text-foreground">
+                {device.deviceInfo?.serialNumber || device._id}
+              </strong>{' '}
+              akan dihapus dari peta live device.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void handleConfirmDelete()}>
+              Hapus Titik
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
   )
 }
 
@@ -1207,57 +1679,68 @@ export default function DeviceDetailPage() {
               </div>
             </div>
 
-            <div className="modern-card p-5 sm:p-6">
-              <p className="page-kicker">Customer access</p>
-              <h2 className="section-heading">Customer ID</h2>
-              <p className="mt-3 break-all font-mono text-lg font-bold">
-                {device.customer?.customerId || 'Not generated'}
-              </p>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                This ID is permanent after generation and remains bound to SoftwareID plus PPPoE username.
-              </p>
-              <div className="mt-5 border-t border-border pt-4">
-                <label htmlFor="installation-date" className="field-label">Installation date</label>
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <input
-                    id="installation-date"
-                    type="date"
-                    className="modern-input"
-                    value={installationDate}
-                    onChange={(event) => setInstallationDate(event.target.value)}
-                  />
-                  <button
-                    type="button"
-                    className="modern-button shrink-0"
-                    disabled={savingInstallationDate}
-                    onClick={() => void handleSaveInstallationDate()}
-                  >
-                    {savingInstallationDate ? 'Saving…' : 'Save date'}
-                  </button>
+            <div className="flex flex-col gap-6">
+              <div className="modern-card p-5 sm:p-6">
+                <p className="page-kicker">Customer access</p>
+                <h2 className="section-heading">Customer ID</h2>
+                <p className="mt-3 break-all font-mono text-lg font-bold">
+                  {device.customer?.customerId || 'Not generated'}
+                </p>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  This ID is permanent after generation and remains bound to SoftwareID plus PPPoE username.
+                </p>
+                <div className="mt-5 border-t border-border pt-4">
+                  <label htmlFor="installation-date" className="field-label">Installation date</label>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <input
+                      id="installation-date"
+                      type="date"
+                      className="modern-input"
+                      value={installationDate}
+                      onChange={(event) => setInstallationDate(event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="modern-button shrink-0"
+                      disabled={savingInstallationDate}
+                      onClick={() => void handleSaveInstallationDate()}
+                    >
+                      {savingInstallationDate ? 'Saving…' : 'Save date'}
+                    </button>
+                  </div>
+                  <p className="field-hint">Saved in SkyGenPanel and synchronized to GenieACS as an installation tag.</p>
                 </div>
-                <p className="field-hint">Saved in SkyGenPanel and synchronized to GenieACS as an installation tag.</p>
+              </div>
+
+              <div className="modern-card p-6">
+                <h2 className="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">Signal Information</h2>
+                <div className="space-y-3">
+                   <div className="flex justify-between">
+                      <span className="text-gray-600 dark:text-gray-400">RX Power:</span>
+                      <span className={`font-medium ${signalInfo.color}`}>
+                        {vp.rxpower?.value !== null && vp.rxpower?.value !== undefined ? `${vp.rxpower.value} dBm` : 'N/A'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 dark:text-gray-400">Temperature:</span>
+                      <span className="font-medium">{vp.temperature?.value ?? 'N/A'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 dark:text-gray-400">Connection Status:</span>
+                      {primaryWAN ? getStatusBadge(primaryWAN.status || 'Disconnected') : <span className="modern-badge">N/A</span>}
+                    </div>
+                  </div>
               </div>
             </div>
 
-            <div className="modern-card p-6">
-              <h2 className="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">Signal Information</h2>
-              <div className="space-y-3">
-                 <div className="flex justify-between">
-                    <span className="text-gray-600 dark:text-gray-400">RX Power:</span>
-                    <span className={`font-medium ${signalInfo.color}`}>
-                      {vp.rxpower?.value !== null && vp.rxpower?.value !== undefined ? `${vp.rxpower.value} dBm` : 'N/A'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600 dark:text-gray-400">Temperature:</span>
-                    <span className="font-medium">{vp.temperature?.value ?? 'N/A'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600 dark:text-gray-400">Connection Status:</span>
-                    {primaryWAN ? getStatusBadge(primaryWAN.status || 'Disconnected') : <span className="modern-badge">N/A</span>}
-                  </div>
-                </div>
-            </div>
+            <DeviceMapLocationCard
+              device={device}
+              isAdmin={user?.role === 'admin'}
+              onLocationSaved={(location) => {
+                setDevice((current) => current ? { ...current, location } : current)
+              }}
+              onOpenNetworkMap={() => navigate(`/network-map?device=${encodeURIComponent(device._id)}`)}
+            />
           </div>
         )}
 

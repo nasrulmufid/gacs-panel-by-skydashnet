@@ -38,6 +38,8 @@ export interface Device {
   _lastInform?: string
   manufacturer?: string | null
   _registered?: string | null
+  latitude?: number | null
+  longitude?: number | null
 }
 
 export interface DeviceDetail {

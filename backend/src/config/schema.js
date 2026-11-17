@@ -145,6 +145,8 @@ export async function ensureSchema(db = getDb()) {
       t.string('remote_ip_override', 64);
       t.integer('remote_port').defaultTo(80);
       t.string('remote_protocol', 8).defaultTo('http');
+      t.decimal('latitude', 10, 7);
+      t.decimal('longitude', 10, 7);
       t.timestamp('created_at').defaultTo(db.fn.now());
       t.timestamp('updated_at').defaultTo(db.fn.now());
     });
@@ -162,6 +164,16 @@ export async function ensureSchema(db = getDb()) {
     if (!(await db.schema.hasColumn('device_profiles', 'remote_protocol'))) {
       await db.schema.alterTable('device_profiles', (t) => {
         t.string('remote_protocol', 8).defaultTo('http');
+      });
+    }
+    if (!(await db.schema.hasColumn('device_profiles', 'latitude'))) {
+      await db.schema.alterTable('device_profiles', (t) => {
+        t.decimal('latitude', 10, 7);
+      });
+    }
+    if (!(await db.schema.hasColumn('device_profiles', 'longitude'))) {
+      await db.schema.alterTable('device_profiles', (t) => {
+        t.decimal('longitude', 10, 7);
       });
     }
   }
