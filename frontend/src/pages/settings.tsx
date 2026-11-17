@@ -77,13 +77,18 @@ export default function Settings() {
   })
   const [loading, setLoading] = useState(false)
   const [activeTab, setActiveTab] = useState('general')
-  const [testResult, setTestResult] = useState<{success: boolean, message: string, deviceCount?: number} | null>(null)
+  const [testResult, setTestResult] = useState<{ success: boolean, message: string, deviceCount?: number } | null>(null)
   const [dbForm, setDbForm] = useState<DbConfigPayload>({
     client: 'mysql2', host: 'localhost', port: 3306, user: '', password: '', database: '', migrateData: true
   })
   const [activeDb, setActiveDb] = useState<{ client: string; host?: string; database?: string } | null>(null)
   const [dbTesting, setDbTesting] = useState(false)
   const [dbSwitching, setDbSwitching] = useState(false)
+  const [exportingBackup, setExportingBackup] = useState(false)
+  const [restoringBackup, setRestoringBackup] = useState(false)
+  const [backupFileName, setBackupFileName] = useState('')
+  const [parsedBackup, setParsedBackup] = useState<any | null>(null)
+  const [preserveCurrentAdmin, setPreserveCurrentAdmin] = useState(true)
   const [confirmState, setConfirmState] = useState<{
     title: string
     description: string
@@ -93,25 +98,25 @@ export default function Settings() {
 
   useEffect(() => {
     let cancelled = false
-    ;(async () => {
-      const res = await settingsAPI.getAll()
-      if (!cancelled && res.success && res.data) {
-        setSettings(prev => ({ ...prev, ...(res.data as any) }))
-      }
-      setTestResult(null)
-    })()
+      ; (async () => {
+        const res = await settingsAPI.getAll()
+        if (!cancelled && res.success && res.data) {
+          setSettings(prev => ({ ...prev, ...(res.data as any) }))
+        }
+        setTestResult(null)
+      })()
     return () => { cancelled = true }
   }, [])
 
   useEffect(() => {
     if (activeTab !== 'database') return
     let cancelled = false
-    ;(async () => {
-      const res = await databaseAPI.getConfig()
-      if (!cancelled && res.success && res.data) {
-        setActiveDb(res.data as any)
-      }
-    })()
+      ; (async () => {
+        const res = await databaseAPI.getConfig()
+        if (!cancelled && res.success && res.data) {
+          setActiveDb(res.data as any)
+        }
+      })()
     return () => { cancelled = true }
   }, [activeTab])
 
@@ -145,6 +150,97 @@ export default function Settings() {
           toast.error(e?.message || 'Switch failed')
         } finally {
           setDbSwitching(false)
+        }
+      },
+    })
+  }
+
+  const handleExportBackup = async () => {
+    setExportingBackup(true)
+    try {
+      const res = await databaseAPI.exportBackup()
+      if (!res.success || !res.data) {
+        toast.error(res.message || 'Gagal membuat backup database')
+        return
+      }
+      const now = new Date()
+      const pad = (n: number) => String(n).padStart(2, '0')
+      const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`
+      const fileName = `skygenpanel-backup-${stamp}.json`
+      const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = fileName
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+      toast.success(`Backup diunduh (${fileName})`)
+    } catch (e: any) {
+      toast.error(e?.message || 'Gagal mengunduh backup')
+    } finally {
+      setExportingBackup(false)
+    }
+  }
+
+  const handleBackupFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    try {
+      const raw = await file.text()
+      const parsed = JSON.parse(raw)
+      if (!parsed || typeof parsed !== 'object' || !parsed.tables || typeof parsed.tables !== 'object') {
+        toast.error('File JSON bukan format backup SkyGenPanel yang valid')
+        setParsedBackup(null)
+        setBackupFileName('')
+        return
+      }
+      setParsedBackup(parsed)
+      setBackupFileName(file.name)
+    } catch {
+      toast.error('File gagal dibaca. Pastikan file backup berformat JSON valid.')
+      setParsedBackup(null)
+      setBackupFileName('')
+    } finally {
+      event.target.value = ''
+    }
+  }
+
+  const handleRestoreBackup = () => {
+    if (!parsedBackup) return
+    setConfirmState({
+      title: 'Restore database dari file backup?',
+      description: `Data pada database saat ini akan diganti dengan isi dari "${backupFileName}". ${preserveCurrentAdmin ? 'Akun admin/user login saat ini akan dipertahankan.' : 'Semua akun user juga akan diganti sesuai isi backup.'}`,
+      actionLabel: 'Restore Database',
+      onConfirm: async () => {
+        setRestoringBackup(true)
+        loadingCtl.show('Merestore database...')
+        try {
+          const res = await databaseAPI.restoreBackup(parsedBackup, { preserveCurrentAdmin })
+          if (!res.success) {
+            toast.error(res.message || 'Restore database gagal')
+            return
+          }
+          toast.success(res.message || 'Database berhasil di-restore')
+          setParsedBackup(null)
+          setBackupFileName('')
+          const latest = await settingsAPI.getAll()
+          if (latest.success && latest.data) {
+            const nextSettings = latest.data as Record<string, string>
+            setSettings((prev) => ({ ...prev, ...nextSettings }))
+            if (nextSettings.appName) {
+              try {
+                localStorage.setItem('appName', nextSettings.appName)
+                window.dispatchEvent(new CustomEvent('appNameChanged', { detail: nextSettings.appName }))
+              } catch { }
+            }
+          }
+        } catch (e: any) {
+          toast.error(e?.message || 'Restore database gagal')
+        } finally {
+          setRestoringBackup(false)
+          loadingCtl.hide()
         }
       },
     })
@@ -247,7 +343,7 @@ export default function Settings() {
         try {
           localStorage.setItem('appName', settings.appName)
           window.dispatchEvent(new CustomEvent('appNameChanged', { detail: settings.appName }))
-        } catch {}
+        } catch { }
       }
     } finally {
       setLoading(false)
@@ -487,20 +583,20 @@ export default function Settings() {
                     id="application-name"
                     type="text"
                     value={settings.appName}
-                    onChange={(e) => setSettings({...settings, appName: e.target.value})}
+                    onChange={(e) => setSettings({ ...settings, appName: e.target.value })}
                     className="modern-input w-full"
                   />
                 </div>
                 <div>
                   <label htmlFor="genieacs-url" className="field-label">GenieACS URL</label>
                   <div className="flex flex-col gap-2 sm:flex-row">
-                  <input
-                    id="genieacs-url"
-                    type="url"
-                    placeholder="http://127.0.0.1:7557"
-                    value={settings.genieAcsUrl}
-                    onChange={(e) => setSettings({...settings, genieAcsUrl: e.target.value})}
-                    className="modern-input flex-1"
+                    <input
+                      id="genieacs-url"
+                      type="url"
+                      placeholder="http://127.0.0.1:7557"
+                      value={settings.genieAcsUrl}
+                      onChange={(e) => setSettings({ ...settings, genieAcsUrl: e.target.value })}
+                      className="modern-input flex-1"
                     />
                     <button
                       onClick={handleTestConnection}
@@ -515,11 +611,10 @@ export default function Settings() {
               </div>
 
               {testResult && (
-                <div className={`mt-4 p-4 rounded-md ${
-                  testResult.success
+                <div className={`mt-4 p-4 rounded-md ${testResult.success
                     ? 'bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-300 border border-green-200 dark:border-green-800'
                     : 'bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-300 border border-red-200 dark:border-red-800'
-                }`}>
+                  }`}>
                   <div className="flex items-center">
                     <Icon name={testResult.success ? 'check' : 'x'} size={18} className="mr-2" />
                     <span className="font-medium">{testResult.message}</span>
@@ -687,7 +782,7 @@ export default function Settings() {
                     type="text"
                     value={settings[field.key]}
                     placeholder={field.description.startsWith('Optional') ? 'Leave empty if unavailable' : undefined}
-                    onChange={(e) => setSettings({...settings, [field.key]: e.target.value})}
+                    onChange={(e) => setSettings({ ...settings, [field.key]: e.target.value })}
                     className="modern-input w-full font-mono text-sm"
                   />
                   <p className="field-hint">{field.description}</p>
@@ -1266,119 +1361,235 @@ export default function Settings() {
         )}
 
         {activeTab === 'database' && (
-          <Card className="max-w-2xl">
-            <CardHeader>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <CardTitle className="text-lg">Database</CardTitle>
-                <Badge variant="secondary" className="font-mono">
-                  {activeDb ? (activeDb.client === 'mysql2' ? `MySQL (${activeDb.database}@${activeDb.host})` : 'SQLite (local file)') : '…'}
-                </Badge>
-              </div>
-              <CardDescription>
-                Configure the active storage backend for panel settings, vendors, and topology.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-4">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="db-client">Type</Label>
-                <Select
-                  value={dbForm.client}
-                  onValueChange={(value) => setDbForm({ ...dbForm, client: value as DbConfigPayload['client'] })}
-                >
-                  <SelectTrigger id="db-client">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value="mysql2">MySQL / MariaDB</SelectItem>
-                      <SelectItem value="sqlite3">SQLite (local file)</SelectItem>
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </div>
+              <div className="grid max-w-5xl gap-6 lg:grid-cols-2">
+                <Card>
+                  <CardHeader>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <CardTitle className="text-lg">Database</CardTitle>
+                      <Badge variant="secondary" className="font-mono">
+                        {activeDb ? (activeDb.client === 'mysql2' ? `MySQL (${activeDb.database}@${activeDb.host})` : 'SQLite (local file)') : '…'}
+                      </Badge>
+                    </div>
+                    <CardDescription>
+                      Configure the active storage backend for panel settings, vendors, and topology.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-4">
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="db-client">Type</Label>
+                      <Select
+                        value={dbForm.client}
+                        onValueChange={(value) => setDbForm({ ...dbForm, client: value as DbConfigPayload['client'] })}
+                      >
+                        <SelectTrigger id="db-client">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            <SelectItem value="mysql2">MySQL / MariaDB</SelectItem>
+                            <SelectItem value="sqlite3">SQLite (local file)</SelectItem>
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </div>
 
-              {dbForm.client === 'mysql2' && (
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div className="flex flex-col gap-2">
-                    <Label htmlFor="db-host">Host</Label>
-                    <Input id="db-host" value={dbForm.host || ''} onChange={(e) => setDbForm({ ...dbForm, host: e.target.value })} />
+                          {dbForm.client === 'mysql2' && (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="db-host">Host</Label>
+                      <Input id="db-host" value={dbForm.host || ''} onChange={(e) => setDbForm({ ...dbForm, host: e.target.value })} />
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="db-port">Port</Label>
+                      <Input id="db-port" type="number" value={dbForm.port || 3306} onChange={(e) => setDbForm({ ...dbForm, port: Number(e.target.value) })} />
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="db-user">User</Label>
+                      <Input id="db-user" value={dbForm.user || ''} onChange={(e) => setDbForm({ ...dbForm, user: e.target.value })} />
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="db-password">Password</Label>
+                      <Input id="db-password" type="password" value={dbForm.password || ''} onChange={(e) => setDbForm({ ...dbForm, password: e.target.value })} />
+                    </div>
+                    <div className="flex flex-col gap-2 sm:col-span-2">
+                      <Label htmlFor="db-name">Database</Label>
+                      <Input id="db-name" value={dbForm.database || ''} onChange={(e) => setDbForm({ ...dbForm, database: e.target.value })} />
+                    </div>
                   </div>
-                  <div className="flex flex-col gap-2">
-                    <Label htmlFor="db-port">Port</Label>
-                    <Input id="db-port" type="number" value={dbForm.port || 3306} onChange={(e) => setDbForm({ ...dbForm, port: Number(e.target.value) })} />
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    <Label htmlFor="db-user">User</Label>
-                    <Input id="db-user" value={dbForm.user || ''} onChange={(e) => setDbForm({ ...dbForm, user: e.target.value })} />
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    <Label htmlFor="db-password">Password</Label>
-                    <Input id="db-password" type="password" value={dbForm.password || ''} onChange={(e) => setDbForm({ ...dbForm, password: e.target.value })} />
-                  </div>
-                  <div className="flex flex-col gap-2 sm:col-span-2">
-                    <Label htmlFor="db-name">Database</Label>
-                    <Input id="db-name" value={dbForm.database || ''} onChange={(e) => setDbForm({ ...dbForm, database: e.target.value })} />
-                  </div>
+                )}
+
+                <label className="flex items-center gap-2.5 text-sm text-foreground">
+                  <Checkbox
+                    checked={Boolean(dbForm.migrateData)}
+                    onCheckedChange={(checked) => setDbForm({ ...dbForm, migrateData: Boolean(checked) })}
+                  />
+                  Copy existing data to the new database
+                </label>
+
+                <div className="flex flex-col gap-2 pt-2 sm:flex-row">
+                  <Button type="button" variant="outline" onClick={handleDbTest} disabled={dbTesting}>
+                    {dbTesting && <Spinner data-icon="inline-start" />}
+                    {dbTesting ? 'Testing…' : 'Test Connection'}
+                  </Button>
+                  <Button type="button" onClick={handleDbSwitch} disabled={dbSwitching}>
+                    {dbSwitching && <Spinner data-icon="inline-start" />}
+                    {dbSwitching ? 'Switching…' : 'Switch Database'}
+                  </Button>
+                </div>
+
+                <p className="text-xs text-muted-foreground">
+                  After switching, restart the service (skygenpanel restart) for the change to take effect.
+                </p>
+              </CardContent>
+            </Card>
+
+                        <Card>
+                          <CardHeader>
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <CardTitle className="text-lg">Backup &amp; Restore</CardTitle>
+                              <Badge variant="outline" className="font-mono text-xs">JSON Snapshot</Badge>
+                            </div>
+                            <CardDescription>
+                              Ekspor seluruh data panel (pengaturan, vendor, topologi peta, titik lokasi device, akun pelanggan) atau restore dari file backup.
+                            </CardDescription>
+                          </CardHeader>
+                          <CardContent className="flex flex-col gap-5">
+                            <div className="rounded-lg border border-border bg-muted/30 p-4">
+                              <h3 className="text-sm font-semibold text-foreground">Backup Database</h3>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                Unduh salinan lengkap database aktif ke file <code className="font-mono">.json</code> untuk arsip atau migrasi antar instance.
+                              </p>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="mt-3"
+                                disabled={exportingBackup || restoringBackup}
+                                onClick={() => void handleExportBackup()}
+                              >
+                                {exportingBackup ? <Spinner data-icon="inline-start" /> : <Icon name="database" size={16} />}
+                                {exportingBackup ? 'Membuat backup…' : 'Download Backup (.json)'}
+                              </Button>
+                            </div>
+
+                            <div className="flex flex-col gap-3 rounded-lg border border-border p-4">
+                              <div>
+                                <h3 className="text-sm font-semibold text-foreground">Restore Database</h3>
+                                <p className="mt-1 text-xs text-muted-foreground">
+                                  Pilih file backup <code className="font-mono">.json</code> yang diunduh dari SkyGenPanel.
+                                </p>
+                              </div>
+
+                              <div className="flex flex-col gap-2">
+                                <Label htmlFor="backup-file-input">File backup (.json)</Label>
+                                <Input
+                                  id="backup-file-input"
+                                  type="file"
+                                  accept=".json,application/json"
+                                  disabled={restoringBackup}
+                                  onChange={(e) => void handleBackupFileChange(e)}
+                                />
+                              </div>
+
+                            {parsedBackup && (
+                              <div className="rounded-md border border-border bg-muted/40 p-3 text-xs">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="truncate font-mono font-semibold text-foreground">{backupFileName}</span>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="xs"
+                                    onClick={() => {
+                                      setParsedBackup(null)
+                                      setBackupFileName('')
+                                    }}
+                                  >
+                                    Clear
+                                  </Button>
+                                </div>
+                                {parsedBackup.exportedAt && (
+                                  <p className="mt-1 text-muted-foreground">
+                                    Diekspor: {new Date(parsedBackup.exportedAt).toLocaleString('id-ID')}
+                                  </p>
+                                )}
+                                <div className="mt-2 flex flex-wrap gap-1.5 font-mono">
+                                  <Badge variant="secondary">
+                                    settings {Array.isArray(parsedBackup.tables?.settings) ? parsedBackup.tables.settings.length : 0}
+                                  </Badge>
+                                  <Badge variant="secondary">
+                                    vendors {Array.isArray(parsedBackup.tables?.vendors) ? parsedBackup.tables.vendors.length : 0}
+                                  </Badge>
+                                  <Badge variant="secondary">
+                                    nodes {Array.isArray(parsedBackup.tables?.mapping_nodes) ? parsedBackup.tables.mapping_nodes.length : 0}
+                                  </Badge>
+                                  <Badge variant="secondary">
+                                    edges {Array.isArray(parsedBackup.tables?.mapping_edges) ? parsedBackup.tables.mapping_edges.length : 0}
+                                  </Badge>
+                                  <Badge variant="secondary">
+                                    devices {Array.isArray(parsedBackup.tables?.device_profiles) ? parsedBackup.tables.device_profiles.length : 0}
+                                  </Badge>
+                                  <Badge variant="secondary">
+                                    customers {Array.isArray(parsedBackup.tables?.customer_accounts) ? parsedBackup.tables.customer_accounts.length : 0}
+                                  </Badge>
+                                  <Badge variant="secondary">
+                                    users {Array.isArray(parsedBackup.tables?.users) ? parsedBackup.tables.users.length : 0}
+                                  </Badge>
+                                </div>
+                              </div>
+                            )}
+
+                            <label className="flex items-center gap-2.5 text-sm text-foreground">
+                              <Checkbox
+                                checked={preserveCurrentAdmin}
+                                onCheckedChange={(checked) => setPreserveCurrentAdmin(Boolean(checked))}
+                              />
+                              Pertahankan akun login admin saat ini (jangan timpa user)
+                            </label>
+
+                        <Button
+                          type="button"
+                          disabled={!parsedBackup || restoringBackup || exportingBackup}
+                          onClick={handleRestoreBackup}
+                        >
+                          {restoringBackup ? <Spinner data-icon="inline-start" /> : <Icon name="refresh" size={16} />}
+                          {restoringBackup ? 'Merestore…' : 'Restore Database'}
+                        </Button>
+                      </div>
+              </CardContent>
+                </Card>
+              </div>
+        )}
+
+              {/* Save Button */}
+              {(activeTab === 'general' || activeTab === 'virtual-params' || activeTab === 'customer-portal') && (
+                <div className="mt-8 flex justify-end">
+                  <Button onClick={handleSaveSettings} disabled={loading} className="w-full sm:w-auto">
+                    {loading && <Spinner data-icon="inline-start" />}
+                    {loading ? 'Saving…' : 'Save Settings'}
+                  </Button>
                 </div>
               )}
 
-              <label className="flex items-center gap-2.5 text-sm text-foreground">
-                <Checkbox
-                  checked={Boolean(dbForm.migrateData)}
-                  onCheckedChange={(checked) => setDbForm({ ...dbForm, migrateData: Boolean(checked) })}
-                />
-                Copy existing data to the new database
-              </label>
-
-              <div className="flex flex-col gap-2 pt-2 sm:flex-row">
-                <Button type="button" variant="outline" onClick={handleDbTest} disabled={dbTesting}>
-                  {dbTesting && <Spinner data-icon="inline-start" />}
-                  {dbTesting ? 'Testing…' : 'Test Connection'}
-                </Button>
-                <Button type="button" onClick={handleDbSwitch} disabled={dbSwitching}>
-                  {dbSwitching && <Spinner data-icon="inline-start" />}
-                  {dbSwitching ? 'Switching…' : 'Switch Database'}
-                </Button>
-              </div>
-
-              <p className="text-xs text-muted-foreground">
-                After switching, restart the service (skygenpanel restart) for the change to take effect.
-              </p>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Save Button */}
-        {(activeTab === 'general' || activeTab === 'virtual-params' || activeTab === 'customer-portal') && (
-          <div className="mt-8 flex justify-end">
-            <Button onClick={handleSaveSettings} disabled={loading} className="w-full sm:w-auto">
-              {loading && <Spinner data-icon="inline-start" />}
-              {loading ? 'Saving…' : 'Save Settings'}
-            </Button>
+              <AlertDialog open={Boolean(confirmState)} onOpenChange={(open) => { if (!open) setConfirmState(null) }}>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>{confirmState?.title}</AlertDialogTitle>
+                    <AlertDialogDescription>{confirmState?.description}</AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={() => {
+                        const action = confirmState?.onConfirm
+                        setConfirmState(null)
+                        if (action) void action()
+                      }}
+                    >
+                      {confirmState?.actionLabel || 'Continue'}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
           </div>
-        )}
-
-        <AlertDialog open={Boolean(confirmState)} onOpenChange={(open) => { if (!open) setConfirmState(null) }}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>{confirmState?.title}</AlertDialogTitle>
-              <AlertDialogDescription>{confirmState?.description}</AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={() => {
-                  const action = confirmState?.onConfirm
-                  setConfirmState(null)
-                  if (action) void action()
-                }}
-              >
-                {confirmState?.actionLabel || 'Continue'}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </div>
-    </div>
-  )
-}
+        )
+        }

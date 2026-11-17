@@ -3,6 +3,8 @@ import { getDb, closePool } from '../config/database.js';
 import { buildKnexConfig, readDbConfig, writeDbConfig } from '../config/dbConfig.js';
 import { ensureSchema } from '../config/schema.js';
 import { seedDefaults } from '../config/seed.js';
+import RemoteProxyService from './remoteProxyService.js';
+import DeviceService from './deviceService.js';
 
 const COPY_TABLES = [
   'users',
@@ -135,4 +137,105 @@ export async function switchDatabase(rawConfig, { migrateData = false } = {}) {
   await closePool();
 
   return getActiveConfig();
+}
+
+export async function exportBackup() {
+  const db = getDb();
+  await ensureSchema(db);
+  const tables = {};
+  const counts = {};
+
+  for (const table of COPY_TABLES) {
+    if (await db.schema.hasTable(table)) {
+      const rows = await db(table).select('*');
+      tables[table] = rows;
+      counts[table] = rows.length;
+    } else {
+      tables[table] = [];
+      counts[table] = 0;
+    }
+  }
+
+  return {
+    format: 'skygenpanel-backup',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    client: getActiveConfig().client,
+    counts,
+    tables
+  };
+}
+
+export async function importBackup(backupPayload, { preserveCurrentAdmin = false } = {}) {
+  if (!backupPayload || typeof backupPayload !== 'object' || !backupPayload.tables || typeof backupPayload.tables !== 'object') {
+    throw new Error('Format file backup tidak valid');
+  }
+
+  const hasKnownTable = COPY_TABLES.some((table) => Array.isArray(backupPayload.tables[table]));
+  if (!hasKnownTable) {
+    throw new Error('File backup tidak berisi tabel database yang dikenali');
+  }
+
+  const db = getDb();
+  await ensureSchema(db);
+
+  const backupUsers = Array.isArray(backupPayload.tables.users) ? backupPayload.tables.users : [];
+  const skipUsers = Boolean(preserveCurrentAdmin) || backupUsers.length === 0;
+
+  const columnNamesByTable = new Map();
+  for (const table of COPY_TABLES) {
+    if (await db.schema.hasTable(table)) {
+      const info = await db(table).columnInfo();
+      columnNamesByTable.set(table, Object.keys(info));
+    }
+  }
+
+  const restoredCounts = {};
+
+  await db.transaction(async (trx) => {
+    for (const table of [...COPY_TABLES].reverse()) {
+      if (table === 'users' && skipUsers) continue;
+      if (await trx.schema.hasTable(table)) {
+        await trx(table).del();
+      }
+    }
+
+    for (const table of COPY_TABLES) {
+      if (table === 'users' && skipUsers) continue;
+      const validColumns = columnNamesByTable.get(table);
+      if (!validColumns) continue;
+
+      const rawRows = Array.isArray(backupPayload.tables[table]) ? backupPayload.tables[table] : [];
+      const cleanRows = rawRows
+        .filter((row) => row && typeof row === 'object' && !Array.isArray(row))
+        .map((row) => {
+          const filtered = {};
+          for (const col of validColumns) {
+            if (Object.hasOwn(row, col) && row[col] !== undefined) {
+              filtered[col] = row[col];
+            }
+          }
+          return filtered;
+        })
+        .filter((row) => Object.keys(row).length > 0);
+
+      if (cleanRows.length > 0) {
+        await trx.batchInsert(table, cleanRows, 100);
+      }
+      restoredCounts[table] = cleanRows.length;
+    }
+
+    await seedDefaults(trx);
+  });
+
+  RemoteProxyService.invalidateSettingsCache();
+  RemoteProxyService.invalidateTargetCache();
+  if (DeviceService.dashboardCache) {
+    DeviceService.dashboardCache.expiresAt = 0;
+  }
+
+  return {
+    restoredCounts,
+    preservedUsers: skipUsers
+  };
 }

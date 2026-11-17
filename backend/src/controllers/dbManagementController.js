@@ -31,6 +31,31 @@ const DbManagementController = {
     } catch (error) {
       res.status(400).json({ success: false, message: `Switch failed: ${error.message}` });
     }
+  },
+
+  async exportBackup(req, res) {
+    try {
+      const data = await dbManagement.exportBackup();
+      res.json({ success: true, message: 'Backup database berhasil dibuat', data });
+    } catch (error) {
+      res.status(500).json({ success: false, message: `Backup failed: ${error.message}` });
+    }
+  },
+
+  async restoreBackup(req, res) {
+    try {
+      const { backup, preserveCurrentAdmin } = req.body || {};
+      const result = await dbManagement.importBackup(backup, {
+        preserveCurrentAdmin: Boolean(preserveCurrentAdmin)
+      });
+      res.json({
+        success: true,
+        message: 'Database berhasil di-restore',
+        data: result
+      });
+    } catch (error) {
+      res.status(400).json({ success: false, message: `Restore failed: ${error.message}` });
+    }
   }
 };
 

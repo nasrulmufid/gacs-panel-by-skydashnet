@@ -404,4 +404,20 @@ export const databaseAPI = {
 
   switch: (config: DbConfigPayload) =>
     apiClient.post('/database/switch', config),
+
+  exportBackup: () =>
+    apiClient.get<{
+      format: string
+      version: number
+      exportedAt: string
+      client: string
+      counts: Record<string, number>
+      tables: Record<string, any[]>
+    }>('/database/backup'),
+
+  restoreBackup: (backup: any, options?: { preserveCurrentAdmin?: boolean }) =>
+    apiClient.post<{
+      restoredCounts: Record<string, number>
+      preservedUsers: boolean
+    }>('/database/restore', { backup, ...options }),
 }
