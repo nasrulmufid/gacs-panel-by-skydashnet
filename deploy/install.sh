@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
 # SkyGenPanel installer — single-service GenieACS panel (UI + API on one port).
-# Usage:  curl -fsSL https://raw.githubusercontent.com/skydashnet/genieacs-panel/main/deploy/install.sh | sudo bash
+# Usage:  curl -fsSL https://raw.githubusercontent.com/nasrulmufid/gacs-panel-by-skydashnet/main/deploy/install.sh | sudo bash
 #
 set -euo pipefail
 
-REPO_URL="${SKYGP_REPO:-https://github.com/skydashnet/genieacs-panel}"
+REPO_URL="${SKYGP_REPO:-https://github.com/nasrulmufid/gacs-panel-by-skydashnet}"
 BRANCH="${SKYGP_BRANCH:-main}"
 INSTALL_DIR="${SKYGP_DIR:-/opt/skygenpanel}"
 DATA_DIR="${SKYGP_DATA:-/var/lib/skygenpanel}"
@@ -202,7 +202,7 @@ validate_dir_syntax "data directory" "$DATA_DIR"
 if [ "$EUID" -eq 0 ]; then
   log "Root privileges detected; sudo is not required."
 else
-  die "Root privileges are required. Re-run with: curl -fsSL https://raw.githubusercontent.com/skydashnet/genieacs-panel/main/deploy/install.sh | sudo bash"
+  die "Root privileges are required. Re-run with: curl -fsSL https://raw.githubusercontent.com/nasrulmufid/gacs-panel-by-skydashnet/main/deploy/install.sh | sudo bash"
 fi
 
 # --- dependencies -----------------------------------------------------------
@@ -291,7 +291,8 @@ ACTIVE_PORTAL_PORT="${ACTIVE_PORTAL_PORT:-$PORTAL_PORT}"
 
 chown -R root:root "$INSTALL_DIR"
 chown -R "$SERVICE_USER":"$SERVICE_USER" "$DATA_DIR"
-chmod 600 "$ENV_FILE"
+chown root:"$SERVICE_USER" "$ENV_FILE"
+chmod 640 "$ENV_FILE"
 
 # --- systemd unit -----------------------------------------------------------
 log "Installing systemd unit /etc/systemd/system/${SERVICE_NAME}.service"

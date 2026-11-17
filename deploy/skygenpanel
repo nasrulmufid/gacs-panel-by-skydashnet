@@ -130,7 +130,8 @@ cmd_update() {
   ( cd "$INSTALL_DIR/frontend" && npm ci --include=dev && npm run build )
   ensure_env_defaults
   chown -R root:root "$INSTALL_DIR"
-  chmod 600 "$ENV_FILE"
+  chown root:"${SKYGP_USER:-skygenpanel}" "$ENV_FILE" 2>/dev/null || true
+  chmod 640 "$ENV_FILE"
   log "Restarting service"
   systemctl restart "$SERVICE_NAME"
   log "Update complete."

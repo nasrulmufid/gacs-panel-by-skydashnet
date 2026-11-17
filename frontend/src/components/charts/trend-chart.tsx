@@ -28,22 +28,22 @@ export function TrendChart({ data, valueLabel = 'Devices' }: { data: TrendPoint[
       <svg viewBox={`0 0 ${width} ${height}`} className="h-[250px] w-full overflow-visible" role="img" aria-label={`${valueLabel} trend`}>
         <defs>
           <linearGradient id="nativeDashboardTrend" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity=".36" />
-            <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity=".02" />
+            <stop offset="0%" stopColor="var(--primary)" stopOpacity=".36" />
+            <stop offset="100%" stopColor="var(--primary)" stopOpacity=".02" />
           </linearGradient>
         </defs>
         {[0, 0.5, 1].map((ratio) => (
           <line key={ratio} x1={left} x2={width - right} y1={top + chartHeight * ratio} y2={top + chartHeight * ratio}
-            stroke="hsl(var(--border))" strokeWidth="1" />
+            stroke="var(--border)" strokeWidth="1" />
         ))}
         {area && <path d={area} fill="url(#nativeDashboardTrend)" />}
-        {line && <polyline points={line} fill="none" stroke="hsl(var(--primary))" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />}
+        {line && <polyline points={line} fill="none" stroke="var(--primary)" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />}
         {points.map((point) => (
           <g key={point.name}>
-            <circle cx={point.x} cy={point.y} r="5" fill="hsl(var(--card))" stroke="hsl(var(--primary))" strokeWidth="3" tabIndex={0}>
+            <circle cx={point.x} cy={point.y} r="5" fill="var(--card)" stroke="var(--primary)" strokeWidth="3" tabIndex={0}>
               <title>{point.name}: {point.value} {valueLabel}</title>
             </circle>
-            <text x={point.x} y={height - 9} textAnchor="middle" fill="hsl(var(--muted-foreground))" fontSize="11">{point.name}</text>
+            <text x={point.x} y={height - 9} textAnchor="middle" fill="var(--muted-foreground)" fontSize="11">{point.name}</text>
           </g>
         ))}
       </svg>

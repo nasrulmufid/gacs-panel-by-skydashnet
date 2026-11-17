@@ -26,7 +26,7 @@ export function PieChart({ data, valueLabel = 'Devices' }: { data: PieChartData[
     <div className="grid min-h-[250px] items-center gap-4 sm:grid-cols-[minmax(180px,1fr)_minmax(140px,0.7fr)]">
       <div className="relative mx-auto size-[210px]">
         <svg viewBox="0 0 180 180" className="size-full -rotate-90" role="img" aria-label={`${valueLabel} distribution`}>
-          <circle cx="90" cy="90" r={RADIUS} fill="none" stroke="hsl(var(--muted))" strokeWidth="30" />
+          <circle cx="90" cy="90" r={RADIUS} fill="none" stroke="var(--muted)" strokeWidth="30" />
           {segments.map((segment, index) => (
             <circle
               key={segment.name}
