@@ -149,7 +149,9 @@ function getFiberMeta(type: FiberType) {
 
 function getTileUrlAndAttrib() {
   return {
-    url: 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=id&gl=id',
+    // Hide POI markers (s.t:2), transit icons (s.t:4), and label icons (s.e:l.i)
+    // while keeping satellite imagery, road names, and city/district titles.
+    url: 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=id&gl=id&apistyle=s.t%3A2%7Cp.v%3Aoff%2Cs.t%3A4%7Cp.v%3Aoff%2Cs.e%3Al.i%7Cp.v%3Aoff',
     attribution: 'Map data &copy; Google'
   }
 }
@@ -868,11 +870,10 @@ export default function NetworkMap() {
             <button
               type="button"
               onClick={() => setShowLiveDevices((prev) => !prev)}
-              className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-0.5 font-mono text-xs font-semibold transition-colors ${
-                showLiveDevices
+              className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-0.5 font-mono text-xs font-semibold transition-colors ${showLiveDevices
                   ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
                   : 'border-border bg-muted text-muted-foreground'
-              }`}
+                }`}
             >
               <span className={`size-2 rounded-full ${showLiveDevices ? 'bg-emerald-500' : 'bg-muted-foreground'}`} />
               LIVE ONT {liveDevices.length}

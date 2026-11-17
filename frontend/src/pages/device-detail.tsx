@@ -623,7 +623,9 @@ function EditWifiModal({
 
 function getPickerTileConfig() {
   return {
-    url: 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=id&gl=id',
+    // Hide POI markers (s.t:2), transit icons (s.t:4), and label icons (s.e:l.i)
+    // while keeping satellite imagery, road names, and city/district titles.
+    url: 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=id&gl=id&apistyle=s.t%3A2%7Cp.v%3Aoff%2Cs.t%3A4%7Cp.v%3Aoff%2Cs.e%3Al.i%7Cp.v%3Aoff',
     attribution: 'Map data &copy; Google'
   }
 }
