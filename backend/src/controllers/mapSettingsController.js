@@ -1,11 +1,16 @@
 import MapSettings from '../models/MapSettings.js';
+import Setting from '../models/Setting.js';
 import { createResponse, createErrorResponse } from '../utils/helpers.js';
 
 class MapSettingsController {
   static async getMapSettings(req, res) {
     try {
-      const settings = await MapSettings.get();
-      
+      const [settings, googleMapsApiKey] = await Promise.all([
+        MapSettings.get(),
+        Setting.getByKey('googleMapsApiKey')
+      ]);
+      const resolvedApiKey = String(googleMapsApiKey || process.env.GOOGLE_MAPS_API_KEY || '').trim();
+
       if (!settings) {
         return res.json(
           createResponse('Map settings retrieved successfully', {
@@ -13,13 +18,18 @@ class MapSettingsController {
             center_lng: '106.8456',
             max_zoom_in: '18',
             max_zoom_out: '5',
-            default_zoom: '13'
+            default_zoom: '13',
+            google_maps_api_key: resolvedApiKey
           })
         );
       }
-      
+
+
       return res.json(
-        createResponse('Map settings retrieved successfully', settings)
+        createResponse('Map settings retrieved successfully', {
+          ...settings,
+          google_maps_api_key: resolvedApiKey
+        })
       );
     } catch (error) {
       console.error('Get map settings error:', error);
@@ -32,7 +42,7 @@ class MapSettingsController {
   static async updateMapSettings(req, res) {
     try {
       const { center_lat, center_lng, max_zoom_in, max_zoom_out, default_zoom } = req.body;
-      
+
       if ([center_lat, center_lng, max_zoom_in, max_zoom_out, default_zoom]
         .some((value) => value === undefined || value === null || value === '')) {
         return res.status(400).json(
@@ -67,9 +77,9 @@ class MapSettingsController {
         max_zoom_out: String(maxOut),
         default_zoom: String(defaultLevel)
       });
-      
+
       const updatedSettings = await MapSettings.get();
-      
+
       return res.json(
         createResponse('Map settings updated successfully', updatedSettings)
       );
@@ -84,9 +94,9 @@ class MapSettingsController {
   static async resetMapSettings(req, res) {
     try {
       await MapSettings.reset();
-      
+
       const resetSettings = await MapSettings.get();
-      
+
       return res.json(
         createResponse('Map settings reset to defaults', resetSettings)
       );

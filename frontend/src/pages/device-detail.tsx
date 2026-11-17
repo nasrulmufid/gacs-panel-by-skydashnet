@@ -8,6 +8,14 @@ import { devicesAPI, mapSettingsAPI } from '@/lib/api'
 import { copyToClipboard, formatDate } from '@/lib/utils'
 import { Icon } from '@/components/ui/icon'
 import { useAuth } from '@/contexts/auth-context'
+import { useTheme } from '@/contexts/theme-context'
+import {
+  CLEAN_ROADMAP_DARK_STYLES,
+  CLEAN_ROADMAP_STYLES,
+  loadGoogleMapsApi,
+  svgToDataUri,
+  type GoogleMapMode,
+} from '@/lib/google-maps'
 import 'leaflet/dist/leaflet.css'
 
 const leafletModulePromise = import('leaflet')
@@ -433,7 +441,7 @@ function EditCredentialModal({
   credentialType,
   username,
   onSave
-} : {
+}: {
   isOpen: boolean;
   onClose: () => void;
   credentialType: 'super' | 'user' | null;
@@ -641,6 +649,7 @@ function DeviceMapLocationCard({
   onLocationSaved: (location: { latitude: number; longitude: number } | null) => void
   onOpenNetworkMap: () => void
 }) {
+  const { isDarkMode } = useTheme()
   const toast = useToast()
 
   const [mapCenter, setMapCenter] = useState<[number, number]>(() =>
@@ -649,6 +658,12 @@ function DeviceMapLocationCard({
   const [defaultZoom, setDefaultZoom] = useState(() => (device.location ? 16 : 13))
   const [minZoom, setMinZoom] = useState(5)
   const [maxZoom, setMaxZoom] = useState(18)
+  const [googleApiKey, setGoogleApiKey] = useState('')
+  const [settingsLoaded, setSettingsLoaded] = useState(false)
+  const [googleMapError, setGoogleMapError] = useState(false)
+  const [googleMapMode, setGoogleMapMode] = useState<GoogleMapMode>(() =>
+    typeof window !== 'undefined' && localStorage.getItem('googleMapMode') === 'hybrid' ? 'hybrid' : 'roadmap'
+  )
   const [draftLocation, setDraftLocation] = useState<{ latitude: number; longitude: number } | null>(
     device.location || null
   )
@@ -657,11 +672,17 @@ function DeviceMapLocationCard({
   const [saving, setSaving] = useState(false)
   const [locating, setLocating] = useState(false)
 
+  const useGoogleMaps = Boolean(googleApiKey) && !googleMapError
+
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<any>(null)
   const markerRef = useRef<any>(null)
   const tileLayerRef = useRef<any>(null)
   const leafletRef = useRef<any>(null)
+  const gmapsContainerRef = useRef<HTMLDivElement | null>(null)
+  const gmapsMapRef = useRef<any>(null)
+  const gmapsApiRef = useRef<any>(null)
+  const gmapsMarkerRef = useRef<any>(null)
   const initialLocationRef = useRef(device.location || null)
   const isAdminRef = useRef(isAdmin)
 
@@ -679,13 +700,19 @@ function DeviceMapLocationCard({
     void (async () => {
       try {
         const res = await mapSettingsAPI.get()
-        if (cancelled || !res.success || !res.data) return
+        if (cancelled || !res.success || !res.data) {
+          if (!cancelled) setSettingsLoaded(true)
+          return
+        }
         const s = res.data as any
         const nextMin = Number.isFinite(Number(s.max_zoom_out)) ? Number(s.max_zoom_out) : 5
         const nextMax = Number.isFinite(Number(s.max_zoom_in)) ? Number(s.max_zoom_in) : 18
         const nextZoom = Number.isFinite(Number(s.default_zoom)) ? Number(s.default_zoom) : 13
         setMinZoom(nextMin)
         setMaxZoom(nextMax)
+        if (typeof s.google_maps_api_key === 'string') {
+          setGoogleApiKey(s.google_maps_api_key.trim())
+        }
         if (!initialLocationRef.current) {
           const lat = Number(s.center_lat)
           const lng = Number(s.center_lng)
@@ -693,10 +720,14 @@ function DeviceMapLocationCard({
             setMapCenter([lat, lng])
             setDefaultZoom(nextZoom)
             mapRef.current?.setView([lat, lng], nextZoom)
+            gmapsMapRef.current?.setCenter({ lat, lng })
+            gmapsMapRef.current?.setZoom(nextZoom)
           }
         }
       } catch {
         // Default center remains active when map settings cannot be loaded.
+      } finally {
+        if (!cancelled) setSettingsLoaded(true)
       }
     })()
     return () => {
@@ -750,7 +781,108 @@ function DeviceMapLocationCard({
     }
   }, [])
 
+  const syncGoogleMarker = useCallback((loc: { latitude: number; longitude: number } | null) => {
+    const gmaps = gmapsApiRef.current
+    const map = gmapsMapRef.current
+    if (!gmaps || !map) return
+
+    if (!loc) {
+      if (gmapsMarkerRef.current) {
+        gmapsMarkerRef.current.setMap(null)
+        gmapsMarkerRef.current = null
+      }
+      return
+    }
+
+    const pinSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="#0ea5e9" stroke="#ffffff" stroke-width="3"/><circle cx="16" cy="16" r="4" fill="#ffffff"/></svg>`
+    const position = { lat: loc.latitude, lng: loc.longitude }
+    if (gmapsMarkerRef.current) {
+      gmapsMarkerRef.current.setPosition(position)
+    } else {
+      const marker = new gmaps.Marker({
+        map,
+        position,
+        draggable: isAdminRef.current,
+        icon: {
+          url: svgToDataUri(pinSvg),
+          scaledSize: new gmaps.Size(32, 32),
+          anchor: new gmaps.Point(16, 16),
+        },
+      })
+      marker.addListener('dragend', (event: any) => {
+        if (!event?.latLng) return
+        setDraftLocation({
+          latitude: Number(event.latLng.lat().toFixed(6)),
+          longitude: Number(event.latLng.lng().toFixed(6)),
+        })
+      })
+      gmapsMarkerRef.current = marker
+    }
+  }, [])
+
   useEffect(() => {
+    if (!settingsLoaded || !useGoogleMaps) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const gmaps = await loadGoogleMapsApi(googleApiKey)
+        if (cancelled || !gmapsContainerRef.current) return
+        gmapsApiRef.current = gmaps
+        if (!gmapsMapRef.current) {
+          const initialCenter = initialLocationRef.current
+            ? { lat: initialLocationRef.current.latitude, lng: initialLocationRef.current.longitude }
+            : { lat: mapCenter[0], lng: mapCenter[1] }
+          const initialZoom = initialLocationRef.current ? Math.min(maxZoom, 16) : defaultZoom
+          const map = new gmaps.Map(gmapsContainerRef.current, {
+            center: initialCenter,
+            zoom: initialZoom,
+            minZoom,
+            maxZoom: Math.max(maxZoom, 20),
+            mapTypeId: googleMapMode,
+            mapTypeControl: false,
+            streetViewControl: false,
+            fullscreenControl: true,
+            styles: googleMapMode === 'roadmap'
+              ? (isDarkMode ? CLEAN_ROADMAP_DARK_STYLES : CLEAN_ROADMAP_STYLES)
+              : undefined,
+          })
+          map.addListener('click', (event: any) => {
+            if (!isAdminRef.current || !event?.latLng) return
+            setDraftLocation({
+              latitude: Number(event.latLng.lat().toFixed(6)),
+              longitude: Number(event.latLng.lng().toFixed(6)),
+            })
+          })
+          gmapsMapRef.current = map
+          syncGoogleMarker(initialLocationRef.current)
+        }
+      } catch {
+        if (!cancelled) setGoogleMapError(true)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsLoaded, useGoogleMaps, googleApiKey])
+
+  useEffect(() => {
+    const map = gmapsMapRef.current
+    if (!map || !useGoogleMaps) return
+    map.setMapTypeId(googleMapMode)
+    map.setOptions({
+      styles: googleMapMode === 'roadmap'
+        ? (isDarkMode ? CLEAN_ROADMAP_DARK_STYLES : CLEAN_ROADMAP_STYLES)
+        : null,
+    })
+  }, [googleMapMode, isDarkMode, useGoogleMaps])
+
+  useEffect(() => {
+    if (gmapsMapRef.current && useGoogleMaps) syncGoogleMarker(draftLocation)
+  }, [draftLocation, syncGoogleMarker, useGoogleMaps])
+
+  useEffect(() => {
+    if (!settingsLoaded || useGoogleMaps) return
     let cancelled = false
     void (async () => {
       if (!leafletRef.current) {
@@ -789,273 +921,301 @@ function DeviceMapLocationCard({
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+}, [settingsLoaded, useGoogleMaps])
 
-  useEffect(() => {
-    if (!mapRef.current) return
-    mapRef.current.setMinZoom(minZoom)
-    mapRef.current.setMaxZoom(maxZoom)
-  }, [minZoom, maxZoom])
+useEffect(() => {
+  if (!mapRef.current || useGoogleMaps) return
+  mapRef.current.setMinZoom(minZoom)
+  mapRef.current.setMaxZoom(maxZoom)
+  }, [minZoom, maxZoom, useGoogleMaps])
 
-  useEffect(() => {
-    if (mapRef.current) updateTileLayer()
-  }, [updateTileLayer])
+useEffect(() => {
+if (mapRef.current && !useGoogleMaps) updateTileLayer()
+  }, [updateTileLayer, useGoogleMaps])
 
-  useEffect(() => {
-    if (mapRef.current) syncMarker(draftLocation)
-  }, [draftLocation, syncMarker])
+useEffect(() => {
+if (mapRef.current && !useGoogleMaps) syncMarker(draftLocation)
+  }, [draftLocation, syncMarker, useGoogleMaps])
 
-  useEffect(() => () => {
-    mapRef.current?.remove()
-    mapRef.current = null
-    markerRef.current = null
-    tileLayerRef.current = null
-  }, [])
+useEffect(() => () => {
+  mapRef.current?.remove()
+  mapRef.current = null
+  markerRef.current = null
+  tileLayerRef.current = null
+  gmapsMarkerRef.current?.setMap?.(null)
+  gmapsMarkerRef.current = null
+  gmapsMapRef.current = null
+}, [])
 
-  const handleUseCurrentGps = () => {
-    if (!navigator.geolocation) {
-      toast.error('Browser tidak mendukung geolokasi GPS')
+const handleUseCurrentGps = () => {
+  if (!navigator.geolocation) {
+    toast.error('Browser tidak mendukung geolokasi GPS')
+    return
+  }
+  setLocating(true)
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      const next = {
+        latitude: Number(pos.coords.latitude.toFixed(6)),
+        longitude: Number(pos.coords.longitude.toFixed(6)),
+      }
+      setDraftLocation(next)
+      if (gmapsMapRef.current && useGoogleMaps) {
+        gmapsMapRef.current.setCenter({ lat: next.latitude, lng: next.longitude })
+        gmapsMapRef.current.setZoom(Math.min(maxZoom, 17))
+      } else {
+        mapRef.current?.setView([next.latitude, next.longitude], Math.min(maxZoom, 17))
+      }
+      setLocating(false)
+    },
+    (err) => {
+      toast.error(`Gagal mengambil lokasi GPS: ${err.message}`)
+      setLocating(false)
+    },
+    { enableHighAccuracy: true, timeout: 10000 }
+  )
+}
+
+const handleConfirmSave = async () => {
+  if (!draftLocation) return
+  setConfirmSaveOpen(false)
+  setSaving(true)
+  try {
+    const res = await devicesAPI.updateLocation(device._id, draftLocation)
+    if (!res.success) {
+      toast.error(res.message || 'Gagal menyimpan lokasi perangkat')
       return
     }
-    setLocating(true)
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const next = {
-          latitude: Number(pos.coords.latitude.toFixed(6)),
-          longitude: Number(pos.coords.longitude.toFixed(6)),
-        }
-        setDraftLocation(next)
-        mapRef.current?.setView([next.latitude, next.longitude], Math.min(maxZoom, 17))
-        setLocating(false)
-      },
-      (err) => {
-        toast.error(`Gagal mengambil lokasi GPS: ${err.message}`)
-        setLocating(false)
-      },
-      { enableHighAccuracy: true, timeout: 10000 }
-    )
+    const saved = res.data?.location || draftLocation
+    onLocationSaved(saved)
+    toast.success(res.message || 'Lokasi perangkat berhasil disimpan')
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : 'Gagal menyimpan lokasi perangkat')
+  } finally {
+    setSaving(false)
   }
+}
 
-  const handleConfirmSave = async () => {
-    if (!draftLocation) return
-    setConfirmSaveOpen(false)
-    setSaving(true)
-    try {
-      const res = await devicesAPI.updateLocation(device._id, draftLocation)
-      if (!res.success) {
-        toast.error(res.message || 'Gagal menyimpan lokasi perangkat')
-        return
-      }
-      const saved = res.data?.location || draftLocation
-      onLocationSaved(saved)
-      toast.success(res.message || 'Lokasi perangkat berhasil disimpan')
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Gagal menyimpan lokasi perangkat')
-    } finally {
-      setSaving(false)
+const handleConfirmDelete = async () => {
+  setConfirmDeleteOpen(false)
+  setSaving(true)
+  try {
+    const res = await devicesAPI.updateLocation(device._id, { latitude: null, longitude: null })
+    if (!res.success) {
+      toast.error(res.message || 'Gagal menghapus lokasi perangkat')
+      return
     }
+    setDraftLocation(null)
+    onLocationSaved(null)
+    toast.success(res.message || 'Lokasi perangkat dihapus')
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : 'Gagal menghapus lokasi perangkat')
+  } finally {
+    setSaving(false)
   }
+}
 
-  const handleConfirmDelete = async () => {
-    setConfirmDeleteOpen(false)
-    setSaving(true)
-    try {
-      const res = await devicesAPI.updateLocation(device._id, { latitude: null, longitude: null })
-      if (!res.success) {
-        toast.error(res.message || 'Gagal menghapus lokasi perangkat')
-        return
-      }
-      setDraftLocation(null)
-      onLocationSaved(null)
-      toast.success(res.message || 'Lokasi perangkat dihapus')
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Gagal menghapus lokasi perangkat')
-    } finally {
-      setSaving(false)
-    }
-  }
+const hasUnsavedChange = Boolean(
+  draftLocation &&
+  (!device.location ||
+    Math.abs(draftLocation.latitude - device.location.latitude) > 1e-6 ||
+    Math.abs(draftLocation.longitude - device.location.longitude) > 1e-6)
+)
 
-  const hasUnsavedChange = Boolean(
-    draftLocation &&
-    (!device.location ||
-      Math.abs(draftLocation.latitude - device.location.latitude) > 1e-6 ||
-      Math.abs(draftLocation.longitude - device.location.longitude) > 1e-6)
-  )
-
-  return (
-    <div className="modern-card p-5 sm:p-6 lg:col-span-2">
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Map Location</h2>
-            {device.location ? (
-              <Badge variant="secondary" className="font-mono text-xs">
-                Pinned · {device.location.latitude.toFixed(6)}, {device.location.longitude.toFixed(6)}
-              </Badge>
-            ) : (
-              <Badge variant="outline" className="text-xs">Belum ditandai</Badge>
-            )}
-            {hasUnsavedChange && (
-              <Badge className="bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">
-                Belum disimpan
-              </Badge>
-            )}
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {isAdmin
-              ? 'Klik titik pada peta (atau geser pin) untuk menandai lokasi perangkat, lalu konfirmasi dan simpan agar tampil di Network Map.'
-              : 'Lokasi koordinat perangkat yang tercatat pada peta jaringan.'}
-          </p>
-        </div>
+return (
+  <div className="modern-card p-5 sm:p-6 lg:col-span-2">
+    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div>
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline" className="text-xs">Google Satellite</Badge>
-          {device.location && (
-            <Button type="button" variant="outline" size="sm" onClick={onOpenNetworkMap}>
-              <Icon name="map" size={16} />
-              Lihat di Map
-            </Button>
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Map Location</h2>
+          {device.location ? (
+            <Badge variant="secondary" className="font-mono text-xs">
+              Pinned · {device.location.latitude.toFixed(6)}, {device.location.longitude.toFixed(6)}
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="text-xs">Belum ditandai</Badge>
+          )}
+          {hasUnsavedChange && (
+            <Badge className="bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">
+              Belum disimpan
+            </Badge>
           )}
         </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {isAdmin
+            ? 'Klik titik pada peta (atau geser pin) untuk menandai lokasi perangkat, lalu konfirmasi dan simpan agar tampil di Network Map.'
+            : 'Lokasi koordinat perangkat yang tercatat pada peta jaringan.'}
+        </p>
       </div>
-
-      <div className="relative z-0 isolate h-72 w-full overflow-hidden rounded-md border border-border sm:h-80">
-        <div ref={mapContainerRef} className="h-full w-full" />
+      <div className="flex flex-wrap items-center gap-2">
+        {useGoogleMaps ? (
+          <Tabs
+            value={googleMapMode}
+            onValueChange={(value) => {
+              const next = value as GoogleMapMode
+              setGoogleMapMode(next)
+              localStorage.setItem('googleMapMode', next)
+            }}
+          >
+            <TabsList>
+              <TabsTrigger value="roadmap">Roadmap (Clean)</TabsTrigger>
+              <TabsTrigger value="hybrid">Satellite</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        ) : (
+          <Badge variant="outline" className="text-xs">Google Satellite</Badge>
+        )}
+        {device.location && (
+          <Button type="button" variant="outline" size="sm" onClick={onOpenNetworkMap}>
+            <Icon name="map" size={16} />
+            Lihat di Map
+          </Button>
+        )}
       </div>
+    </div>
 
-      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div className="grid grid-cols-2 gap-3 sm:max-w-md flex-1">
-          <div>
-            <Label htmlFor="device-lat" className="text-xs text-muted-foreground">Latitude</Label>
-            <Input
-              id="device-lat"
-              type="number"
-              step="any"
-              min={-90}
-              max={90}
-              readOnly={!isAdmin}
-              className="mt-1 font-mono text-sm"
-              placeholder="-6.208800"
-              value={draftLocation ? String(draftLocation.latitude) : ''}
-              onChange={(e) => {
-                if (e.target.value.trim() === '') return
-                const val = Number(e.target.value)
-                if (!Number.isFinite(val) || val < -90 || val > 90) return
-                setDraftLocation((prev) => ({
-                  latitude: val,
-                  longitude: prev?.longitude ?? mapCenter[1],
-                }))
-              }}
-            />
-          </div>
-          <div>
-            <Label htmlFor="device-lng" className="text-xs text-muted-foreground">Longitude</Label>
-            <Input
-              id="device-lng"
-              type="number"
-              step="any"
-              min={-180}
-              max={180}
-              readOnly={!isAdmin}
-              className="mt-1 font-mono text-sm"
-              placeholder="106.845600"
-              value={draftLocation ? String(draftLocation.longitude) : ''}
-              onChange={(e) => {
-                if (e.target.value.trim() === '') return
-                const val = Number(e.target.value)
-                if (!Number.isFinite(val) || val < -180 || val > 180) return
-                setDraftLocation((prev) => ({
-                  latitude: prev?.latitude ?? mapCenter[0],
-                  longitude: val,
-                }))
-              }}
-            />
-          </div>
+    <div className="relative z-0 isolate h-72 w-full overflow-hidden rounded-md border border-border sm:h-80">
+      {useGoogleMaps ? (
+        <div key="gmaps" ref={gmapsContainerRef} className="h-full w-full" />
+      ) : (
+        <div key="leaflet" ref={mapContainerRef} className="h-full w-full" />
+      )}
+    </div>
+
+    <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+      <div className="grid grid-cols-2 gap-3 sm:max-w-md flex-1">
+        <div>
+          <Label htmlFor="device-lat" className="text-xs text-muted-foreground">Latitude</Label>
+          <Input
+            id="device-lat"
+            type="number"
+            step="any"
+            min={-90}
+            max={90}
+            readOnly={!isAdmin}
+            className="mt-1 font-mono text-sm"
+            placeholder="-6.208800"
+            value={draftLocation ? String(draftLocation.latitude) : ''}
+            onChange={(e) => {
+              if (e.target.value.trim() === '') return
+              const val = Number(e.target.value)
+              if (!Number.isFinite(val) || val < -90 || val > 90) return
+              setDraftLocation((prev) => ({
+                latitude: val,
+                longitude: prev?.longitude ?? mapCenter[1],
+              }))
+            }}
+          />
         </div>
+        <div>
+          <Label htmlFor="device-lng" className="text-xs text-muted-foreground">Longitude</Label>
+          <Input
+            id="device-lng"
+            type="number"
+            step="any"
+            min={-180}
+            max={180}
+            readOnly={!isAdmin}
+            className="mt-1 font-mono text-sm"
+            placeholder="106.845600"
+            value={draftLocation ? String(draftLocation.longitude) : ''}
+            onChange={(e) => {
+              if (e.target.value.trim() === '') return
+              const val = Number(e.target.value)
+              if (!Number.isFinite(val) || val < -180 || val > 180) return
+              setDraftLocation((prev) => ({
+                latitude: prev?.latitude ?? mapCenter[0],
+                longitude: val,
+              }))
+            }}
+          />
+        </div>
+      </div>
 
-        {isAdmin && (
-          <div className="flex flex-wrap items-center gap-2">
+      {isAdmin && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={locating || saving}
+            onClick={handleUseCurrentGps}
+          >
+            {locating ? <Spinner data-icon="inline-start" /> : <Icon name="pin" size={16} />}
+            {locating ? 'Mencari GPS…' : 'Gunakan GPS'}
+          </Button>
+          {device.location && (
             <Button
               type="button"
               variant="outline"
               size="sm"
-              disabled={locating || saving}
-              onClick={handleUseCurrentGps}
+              disabled={saving}
+              onClick={() => setConfirmDeleteOpen(true)}
             >
-              {locating ? <Spinner data-icon="inline-start" /> : <Icon name="pin" size={16} />}
-              {locating ? 'Mencari GPS…' : 'Gunakan GPS'}
-            </Button>
-            {device.location && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={saving}
-                onClick={() => setConfirmDeleteOpen(true)}
-              >
-                <Icon name="trash" size={16} />
-                Hapus Titik
-              </Button>
-            )}
-            <Button
-              type="button"
-              size="sm"
-              disabled={saving || !draftLocation}
-              onClick={() => setConfirmSaveOpen(true)}
-            >
-              {saving ? <Spinner data-icon="inline-start" /> : <Icon name="check" size={16} />}
-              {saving ? 'Menyimpan…' : 'Konfirmasi & Simpan Lokasi'}
-            </Button>
-          </div>
-        )}
-      </div>
-
-      <AlertDialog open={confirmSaveOpen} onOpenChange={setConfirmSaveOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Konfirmasi Titik Lokasi Perangkat</AlertDialogTitle>
-            <AlertDialogDescription>
-              Pastikan titik pin pada peta untuk perangkat{' '}
-              <strong className="font-mono text-foreground">
-                {device.deviceInfo?.serialNumber || device._id}
-              </strong>{' '}
-              sudah tepat di koordinat{' '}
-              <strong className="font-mono text-foreground">
-                {draftLocation?.latitude.toFixed(6)}, {draftLocation?.longitude.toFixed(6)}
-              </strong>{' '}
-              sebelum disimpan ke Network Map?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Periksa Lagi</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void handleConfirmSave()}>
-              Ya, Titik Sudah Tepat &amp; Simpan
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <AlertDialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Hapus Titik Lokasi Perangkat?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Titik perangkat{' '}
-              <strong className="font-mono text-foreground">
-                {device.deviceInfo?.serialNumber || device._id}
-              </strong>{' '}
-              akan dihapus dari peta live device.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Batal</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void handleConfirmDelete()}>
+              <Icon name="trash" size={16} />
               Hapus Titik
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </Button>
+          )}
+          <Button
+            type="button"
+            size="sm"
+            disabled={saving || !draftLocation}
+            onClick={() => setConfirmSaveOpen(true)}
+          >
+            {saving ? <Spinner data-icon="inline-start" /> : <Icon name="check" size={16} />}
+            {saving ? 'Menyimpan…' : 'Konfirmasi & Simpan Lokasi'}
+          </Button>
+        </div>
+      )}
     </div>
-  )
+
+    <AlertDialog open={confirmSaveOpen} onOpenChange={setConfirmSaveOpen}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Konfirmasi Titik Lokasi Perangkat</AlertDialogTitle>
+          <AlertDialogDescription>
+            Pastikan titik pin pada peta untuk perangkat{' '}
+            <strong className="font-mono text-foreground">
+              {device.deviceInfo?.serialNumber || device._id}
+            </strong>{' '}
+            sudah tepat di koordinat{' '}
+            <strong className="font-mono text-foreground">
+              {draftLocation?.latitude.toFixed(6)}, {draftLocation?.longitude.toFixed(6)}
+            </strong>{' '}
+            sebelum disimpan ke Network Map?
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Periksa Lagi</AlertDialogCancel>
+          <AlertDialogAction onClick={() => void handleConfirmSave()}>
+            Ya, Titik Sudah Tepat &amp; Simpan
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+
+    <AlertDialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Hapus Titik Lokasi Perangkat?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Titik perangkat{' '}
+            <strong className="font-mono text-foreground">
+              {device.deviceInfo?.serialNumber || device._id}
+            </strong>{' '}
+            akan dihapus dari peta live device.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Batal</AlertDialogCancel>
+          <AlertDialogAction onClick={() => void handleConfirmDelete()}>
+            Hapus Titik
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  </div>
+)
 }
 
 
@@ -1398,24 +1558,24 @@ export default function DeviceDetailPage() {
     if (!status) return <span className="modern-badge">Unknown</span>
 
     if (status.includes(':') || status.includes('Z')) {
-       try {
-         const lastSeen = new Date(status)
-         if (Number.isNaN(lastSeen.getTime())) {
-           return <span className="modern-badge">Invalid Date</span>
-         }
-         const now = new Date()
-         const diffMinutes = Math.floor((now.getTime() - lastSeen.getTime()) / (1000 * 60))
-
-         if (diffMinutes < 10) {
-           return <span className="modern-badge-success">Online</span>
-         } else if (diffMinutes < 60) {
-           return <span className="modern-badge-warning">Away</span>
-         } else {
-           return <span className="modern-badge-error">Offline</span>
-         }
-       } catch {
+      try {
+        const lastSeen = new Date(status)
+        if (Number.isNaN(lastSeen.getTime())) {
           return <span className="modern-badge">Invalid Date</span>
-       }
+        }
+        const now = new Date()
+        const diffMinutes = Math.floor((now.getTime() - lastSeen.getTime()) / (1000 * 60))
+
+        if (diffMinutes < 10) {
+          return <span className="modern-badge-success">Online</span>
+        } else if (diffMinutes < 60) {
+          return <span className="modern-badge-warning">Away</span>
+        } else {
+          return <span className="modern-badge-error">Offline</span>
+        }
+      } catch {
+        return <span className="modern-badge">Invalid Date</span>
+      }
     }
 
     switch (status.toLowerCase()) {
@@ -1447,11 +1607,11 @@ export default function DeviceDetailPage() {
         </svg>
       )}
       {!isBound && (
-         <div className="w-6 h-6 mb-1 flex items-center justify-center text-gray-400 dark:text-gray-600">
-           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
-           </svg>
-         </div>
+        <div className="w-6 h-6 mb-1 flex items-center justify-center text-gray-400 dark:text-gray-600">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+        </div>
       )}
       <span className="text-xs font-semibold">{label}</span>
     </div>
@@ -1687,21 +1847,21 @@ export default function DeviceDetailPage() {
               <div className="modern-card p-6">
                 <h2 className="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">Signal Information</h2>
                 <div className="space-y-3">
-                   <div className="flex justify-between">
-                      <span className="text-gray-600 dark:text-gray-400">RX Power:</span>
-                      <span className={`font-medium ${signalInfo.color}`}>
-                        {vp.rxpower?.value !== null && vp.rxpower?.value !== undefined ? `${vp.rxpower.value} dBm` : 'N/A'}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600 dark:text-gray-400">Temperature:</span>
-                      <span className="font-medium">{vp.temperature?.value ?? 'N/A'}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600 dark:text-gray-400">Connection Status:</span>
-                      {primaryWAN ? getStatusBadge(primaryWAN.status || 'Disconnected') : <span className="modern-badge">N/A</span>}
-                    </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600 dark:text-gray-400">RX Power:</span>
+                    <span className={`font-medium ${signalInfo.color}`}>
+                      {vp.rxpower?.value !== null && vp.rxpower?.value !== undefined ? `${vp.rxpower.value} dBm` : 'N/A'}
+                    </span>
                   </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600 dark:text-gray-400">Temperature:</span>
+                    <span className="font-medium">{vp.temperature?.value ?? 'N/A'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600 dark:text-gray-400">Connection Status:</span>
+                    {primaryWAN ? getStatusBadge(primaryWAN.status || 'Disconnected') : <span className="modern-badge">N/A</span>}
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1767,7 +1927,7 @@ export default function DeviceDetailPage() {
                           <div className="flex justify-between">
                             <span className="text-gray-600 dark:text-gray-400">VLAN ID:</span>
                             <span className="font-medium">
-                              { (wan.vlanId === null || wan.vlanId === undefined) ? (
+                              {(wan.vlanId === null || wan.vlanId === undefined) ? (
                                 <span className="px-2 py-0.5 rounded-md bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 text-xs">
                                   not set
                                 </span>
@@ -1789,7 +1949,7 @@ export default function DeviceDetailPage() {
                           <div className="flex justify-between">
                             <span className="text-gray-600 dark:text-gray-400">Service:</span>
                             <span className="font-medium">
-                            { (wan.serviceList === null || wan.serviceList === undefined) ? (
+                              {(wan.serviceList === null || wan.serviceList === undefined) ? (
                                 <span className="px-2 py-0.5 rounded-md bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 text-xs">
                                   not set
                                 </span>
@@ -1805,7 +1965,7 @@ export default function DeviceDetailPage() {
                           <div className="flex justify-between">
                             <span className="text-gray-600 dark:text-gray-400">NAT:</span>
                             <span className="font-medium">
-                              { (wan.natEnabled === null || wan.natEnabled === undefined) ? 'N/A' : (
+                              {(wan.natEnabled === null || wan.natEnabled === undefined) ? 'N/A' : (
                                 wan.natEnabled ? 'Enabled' : 'Disabled'
                               )}
                             </span>
@@ -2059,8 +2219,8 @@ export default function DeviceDetailPage() {
           credentialType={credentialType}
           username={
             credentialType === 'super' ? (vp.superAdmin?.value || 'N/A') :
-            credentialType === 'user' ? (vp.userAdmin?.value || 'N/A') :
-            ''
+              credentialType === 'user' ? (vp.userAdmin?.value || 'N/A') :
+                ''
           }
           onSave={handleSaveCredentials}
         />

@@ -26,7 +26,8 @@ const ALLOWED_SETTING_KEYS = new Set([
   'remoteProxyBaseDomain',
   'remoteProxyScheme',
   'remoteProxyDefaultPort',
-  'remoteProxyAuthMode'
+  'remoteProxyAuthMode',
+  'googleMapsApiKey'
 ]);
 
 function validateSetting(key, value) {
@@ -95,7 +96,7 @@ class SettingsController {
   static async getSettingByKey(req, res) {
     try {
       const { key } = req.params;
-      
+
       if (!key) {
         return res.status(400).json(
           createErrorResponse('Setting key is required')
@@ -106,7 +107,7 @@ class SettingsController {
       }
 
       const value = await Setting.getByKey(key);
-      
+
       if (value === null) {
         return res.status(404).json(
           createErrorResponse('Setting not found')
@@ -127,7 +128,7 @@ class SettingsController {
   static async createSetting(req, res) {
     try {
       const { key, value } = req.body;
-      
+
       if (!key || value === undefined || value === null) {
         return res.status(400).json(
           createErrorResponse('Key and value are required')
@@ -156,7 +157,7 @@ class SettingsController {
     try {
       const { key } = req.params;
       const { value } = req.body;
-      
+
       if (!key || value === undefined || value === null) {
         return res.status(400).json(
           createErrorResponse('Key and value are required')
@@ -170,7 +171,7 @@ class SettingsController {
 
       const updated = await Setting.update(key, validated.value);
       RemoteProxyService.invalidateSettingsCache();
-      
+
       if (!updated) {
         return res.status(404).json(
           createErrorResponse('Setting not found')
@@ -233,7 +234,7 @@ class SettingsController {
   static async deleteSetting(req, res) {
     try {
       const { key } = req.params;
-      
+
       if (!key) {
         return res.status(400).json(
           createErrorResponse('Setting key is required')
@@ -244,7 +245,7 @@ class SettingsController {
       }
 
       const deleted = await Setting.delete(key);
-      
+
       if (!deleted) {
         return res.status(404).json(
           createErrorResponse('Setting not found')
@@ -265,13 +266,13 @@ class SettingsController {
   static async testGenieAcsConnection(req, res) {
     try {
       const { url } = req.body;
-      
+
       if (!url) {
         return res.status(400).json(
           createErrorResponse('URL is required')
         );
       }
-      
+
       let testUrl;
       try {
         testUrl = new URL(String(url).trim());
@@ -297,10 +298,10 @@ class SettingsController {
       testUrl.search = '';
       testUrl.hash = '';
       testUrl.searchParams.set('limit', '1');
-      
+
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000);
-      
+
       try {
         const response = await fetch(testUrl, {
           method: 'GET',
@@ -309,17 +310,17 @@ class SettingsController {
           },
           signal: controller.signal
         });
-        
+
         clearTimeout(timeoutId);
-        
+
         if (!response.ok) {
           return res.status(502).json(
             createErrorResponse(`GenieACS server returned status ${response.status}`, 'Connection test failed')
           );
         }
-        
+
         const data = await response.json();
-        
+
         if (Array.isArray(data)) {
           return res.json(
             createResponse('Connection successful!', {
@@ -333,19 +334,19 @@ class SettingsController {
         }
       } catch (error) {
         clearTimeout(timeoutId);
-        
+
         if (error.name === 'AbortError' || error.type === 'request-timeout') {
           return res.status(504).json(
             createErrorResponse('Connection timeout - GenieACS server did not respond')
           );
         }
-        
+
         if (error.code === 'ECONNREFUSED') {
           return res.status(502).json(
             createErrorResponse('Connection refused - GenieACS server is not running or URL is incorrect')
           );
         }
-        
+
         return res.status(502).json(
           createErrorResponse('Failed to connect to GenieACS server', error.message)
         );

@@ -23,7 +23,8 @@ export const DEFAULT_SETTINGS = {
   remoteProxyBaseDomain: process.env.REMOTE_PROXY_BASE_DOMAIN || '',
   remoteProxyScheme: process.env.REMOTE_PROXY_SCHEME || 'https',
   remoteProxyDefaultPort: '80',
-  remoteProxyAuthMode: 'token'
+  remoteProxyAuthMode: 'token',
+  googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY || ''
 };
 
 // Values shipped by older SkyGenPanel releases. Only these exact values are

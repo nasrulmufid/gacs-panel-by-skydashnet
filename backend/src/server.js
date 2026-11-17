@@ -60,8 +60,10 @@ const helmetOptions = {
   },
   contentSecurityPolicy: {
     directives: {
-      // Vite emits external hashed modules, so inline scripts remain blocked.
-      scriptSrc: ["'self'"],
+      // Allow Google Maps JavaScript API scripts/styles/tiles when configured.
+      scriptSrc: ["'self'", "'unsafe-inline'", 'https://maps.googleapis.com', 'https://maps.gstatic.com'],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
       // The built-in server defaults to HTTP; upgrading relative assets would
       // make browsers request HTTPS from a port that has no TLS listener.
       upgradeInsecureRequests: null,
@@ -71,9 +73,14 @@ const helmetOptions = {
         'blob:',
         'https://tile.openstreetmap.org',
         'https://*.basemaps.cartocdn.com',
-        'https://mt1.google.com'
+        'https://mt1.google.com',
+        'https://*.googleapis.com',
+        'https://*.gstatic.com',
+        'https://*.google.com',
+        'https://*.ggpht.com'
       ],
-      connectSrc: ["'self'"],
+      connectSrc: ["'self'", 'https://maps.googleapis.com', 'https://*.googleapis.com', 'https://*.gstatic.com'],
+      workerSrc: ["'self'", 'blob:'],
       objectSrc: ["'none'"],
       baseUri: ["'self'"],
       frameAncestors: ["'none'"],

@@ -73,6 +73,7 @@ export default function Settings() {
     remoteProxyScheme: 'https',
     remoteProxyDefaultPort: '80',
     remoteProxyAuthMode: 'token',
+    googleMapsApiKey: '',
     ...INSTALLER_VIRTUAL_PARAMETERS
   })
   const [loading, setLoading] = useState(false)
@@ -607,6 +608,18 @@ export default function Settings() {
                     </button>
                   </div>
                   <p className="field-hint">Masukkan base URL northbound API (NBI), biasanya port 7557. Path <code>/devices</code> ditambahkan otomatis.</p>
+                </div>
+                <div>
+                  <label htmlFor="google-maps-api-key" className="field-label">Google Maps JavaScript API Key</label>
+                  <input
+                    id="google-maps-api-key"
+                    type="text"
+                    placeholder="AIzaSy..."
+                    value={settings.googleMapsApiKey}
+                    onChange={(e) => setSettings({ ...settings, googleMapsApiKey: e.target.value.trim() })}
+                    className="modern-input w-full font-mono text-sm"
+                  />
+                  <p className="field-hint">Opsional. Jika diisi, Network Map dan Device Map Location menggunakan Google Maps JS API (mode Roadmap menyembunyikan ikon POI namun mempertahankan nama tempat).</p>
                 </div>
               </div>
 
