@@ -662,7 +662,7 @@ function DeviceMapLocationCard({
   const [settingsLoaded, setSettingsLoaded] = useState(false)
   const [googleMapError, setGoogleMapError] = useState(false)
   const [googleMapMode, setGoogleMapMode] = useState<GoogleMapMode>(() =>
-    typeof window !== 'undefined' && localStorage.getItem('googleMapMode') === 'hybrid' ? 'hybrid' : 'roadmap'
+    typeof window !== 'undefined' && localStorage.getItem('googleMapMode') === 'roadmap' ? 'roadmap' : 'hybrid'
   )
   const [draftLocation, setDraftLocation] = useState<{ latitude: number; longitude: number } | null>(
     device.location || null
@@ -921,301 +921,301 @@ function DeviceMapLocationCard({
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [settingsLoaded, useGoogleMaps])
+  }, [settingsLoaded, useGoogleMaps])
 
-useEffect(() => {
-  if (!mapRef.current || useGoogleMaps) return
-  mapRef.current.setMinZoom(minZoom)
-  mapRef.current.setMaxZoom(maxZoom)
+  useEffect(() => {
+    if (!mapRef.current || useGoogleMaps) return
+    mapRef.current.setMinZoom(minZoom)
+    mapRef.current.setMaxZoom(maxZoom)
   }, [minZoom, maxZoom, useGoogleMaps])
 
-useEffect(() => {
-if (mapRef.current && !useGoogleMaps) updateTileLayer()
+  useEffect(() => {
+    if (mapRef.current && !useGoogleMaps) updateTileLayer()
   }, [updateTileLayer, useGoogleMaps])
 
-useEffect(() => {
-if (mapRef.current && !useGoogleMaps) syncMarker(draftLocation)
+  useEffect(() => {
+    if (mapRef.current && !useGoogleMaps) syncMarker(draftLocation)
   }, [draftLocation, syncMarker, useGoogleMaps])
 
-useEffect(() => () => {
-  mapRef.current?.remove()
-  mapRef.current = null
-  markerRef.current = null
-  tileLayerRef.current = null
-  gmapsMarkerRef.current?.setMap?.(null)
-  gmapsMarkerRef.current = null
-  gmapsMapRef.current = null
-}, [])
+  useEffect(() => () => {
+    mapRef.current?.remove()
+    mapRef.current = null
+    markerRef.current = null
+    tileLayerRef.current = null
+    gmapsMarkerRef.current?.setMap?.(null)
+    gmapsMarkerRef.current = null
+    gmapsMapRef.current = null
+  }, [])
 
-const handleUseCurrentGps = () => {
-  if (!navigator.geolocation) {
-    toast.error('Browser tidak mendukung geolokasi GPS')
-    return
+  const handleUseCurrentGps = () => {
+    if (!navigator.geolocation) {
+      toast.error('Browser tidak mendukung geolokasi GPS')
+      return
+    }
+    setLocating(true)
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const next = {
+          latitude: Number(pos.coords.latitude.toFixed(6)),
+          longitude: Number(pos.coords.longitude.toFixed(6)),
+        }
+        setDraftLocation(next)
+        if (gmapsMapRef.current && useGoogleMaps) {
+          gmapsMapRef.current.setCenter({ lat: next.latitude, lng: next.longitude })
+          gmapsMapRef.current.setZoom(Math.min(maxZoom, 17))
+        } else {
+          mapRef.current?.setView([next.latitude, next.longitude], Math.min(maxZoom, 17))
+        }
+        setLocating(false)
+      },
+      (err) => {
+        toast.error(`Gagal mengambil lokasi GPS: ${err.message}`)
+        setLocating(false)
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    )
   }
-  setLocating(true)
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      const next = {
-        latitude: Number(pos.coords.latitude.toFixed(6)),
-        longitude: Number(pos.coords.longitude.toFixed(6)),
+
+  const handleConfirmSave = async () => {
+    if (!draftLocation) return
+    setConfirmSaveOpen(false)
+    setSaving(true)
+    try {
+      const res = await devicesAPI.updateLocation(device._id, draftLocation)
+      if (!res.success) {
+        toast.error(res.message || 'Gagal menyimpan lokasi perangkat')
+        return
       }
-      setDraftLocation(next)
-      if (gmapsMapRef.current && useGoogleMaps) {
-        gmapsMapRef.current.setCenter({ lat: next.latitude, lng: next.longitude })
-        gmapsMapRef.current.setZoom(Math.min(maxZoom, 17))
-      } else {
-        mapRef.current?.setView([next.latitude, next.longitude], Math.min(maxZoom, 17))
+      const saved = res.data?.location || draftLocation
+      onLocationSaved(saved)
+      toast.success(res.message || 'Lokasi perangkat berhasil disimpan')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Gagal menyimpan lokasi perangkat')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleConfirmDelete = async () => {
+    setConfirmDeleteOpen(false)
+    setSaving(true)
+    try {
+      const res = await devicesAPI.updateLocation(device._id, { latitude: null, longitude: null })
+      if (!res.success) {
+        toast.error(res.message || 'Gagal menghapus lokasi perangkat')
+        return
       }
-      setLocating(false)
-    },
-    (err) => {
-      toast.error(`Gagal mengambil lokasi GPS: ${err.message}`)
-      setLocating(false)
-    },
-    { enableHighAccuracy: true, timeout: 10000 }
+      setDraftLocation(null)
+      onLocationSaved(null)
+      toast.success(res.message || 'Lokasi perangkat dihapus')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Gagal menghapus lokasi perangkat')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const hasUnsavedChange = Boolean(
+    draftLocation &&
+    (!device.location ||
+      Math.abs(draftLocation.latitude - device.location.latitude) > 1e-6 ||
+      Math.abs(draftLocation.longitude - device.location.longitude) > 1e-6)
   )
-}
 
-const handleConfirmSave = async () => {
-  if (!draftLocation) return
-  setConfirmSaveOpen(false)
-  setSaving(true)
-  try {
-    const res = await devicesAPI.updateLocation(device._id, draftLocation)
-    if (!res.success) {
-      toast.error(res.message || 'Gagal menyimpan lokasi perangkat')
-      return
-    }
-    const saved = res.data?.location || draftLocation
-    onLocationSaved(saved)
-    toast.success(res.message || 'Lokasi perangkat berhasil disimpan')
-  } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'Gagal menyimpan lokasi perangkat')
-  } finally {
-    setSaving(false)
-  }
-}
-
-const handleConfirmDelete = async () => {
-  setConfirmDeleteOpen(false)
-  setSaving(true)
-  try {
-    const res = await devicesAPI.updateLocation(device._id, { latitude: null, longitude: null })
-    if (!res.success) {
-      toast.error(res.message || 'Gagal menghapus lokasi perangkat')
-      return
-    }
-    setDraftLocation(null)
-    onLocationSaved(null)
-    toast.success(res.message || 'Lokasi perangkat dihapus')
-  } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'Gagal menghapus lokasi perangkat')
-  } finally {
-    setSaving(false)
-  }
-}
-
-const hasUnsavedChange = Boolean(
-  draftLocation &&
-  (!device.location ||
-    Math.abs(draftLocation.latitude - device.location.latitude) > 1e-6 ||
-    Math.abs(draftLocation.longitude - device.location.longitude) > 1e-6)
-)
-
-return (
-  <div className="modern-card p-5 sm:p-6 lg:col-span-2">
-    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div>
+  return (
+    <div className="modern-card p-5 sm:p-6 lg:col-span-2">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Map Location</h2>
+            {device.location ? (
+              <Badge variant="secondary" className="font-mono text-xs">
+                Pinned · {device.location.latitude.toFixed(6)}, {device.location.longitude.toFixed(6)}
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="text-xs">Belum ditandai</Badge>
+            )}
+            {hasUnsavedChange && (
+              <Badge className="bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">
+                Belum disimpan
+              </Badge>
+            )}
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {isAdmin
+              ? 'Klik titik pada peta (atau geser pin) untuk menandai lokasi perangkat, lalu konfirmasi dan simpan agar tampil di Network Map.'
+              : 'Lokasi koordinat perangkat yang tercatat pada peta jaringan.'}
+          </p>
+        </div>
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Map Location</h2>
-          {device.location ? (
-            <Badge variant="secondary" className="font-mono text-xs">
-              Pinned · {device.location.latitude.toFixed(6)}, {device.location.longitude.toFixed(6)}
-            </Badge>
+          {useGoogleMaps ? (
+            <Tabs
+              value={googleMapMode}
+              onValueChange={(value) => {
+                const next = value as GoogleMapMode
+                setGoogleMapMode(next)
+                localStorage.setItem('googleMapMode', next)
+              }}
+            >
+              <TabsList>
+                <TabsTrigger value="hybrid">Satellite</TabsTrigger>
+                <TabsTrigger value="roadmap">Roadmap</TabsTrigger>
+              </TabsList>
+            </Tabs>
           ) : (
-            <Badge variant="outline" className="text-xs">Belum ditandai</Badge>
+            <Badge variant="outline" className="text-xs">Google Satellite</Badge>
           )}
-          {hasUnsavedChange && (
-            <Badge className="bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">
-              Belum disimpan
-            </Badge>
-          )}
-        </div>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {isAdmin
-            ? 'Klik titik pada peta (atau geser pin) untuk menandai lokasi perangkat, lalu konfirmasi dan simpan agar tampil di Network Map.'
-            : 'Lokasi koordinat perangkat yang tercatat pada peta jaringan.'}
-        </p>
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        {useGoogleMaps ? (
-          <Tabs
-            value={googleMapMode}
-            onValueChange={(value) => {
-              const next = value as GoogleMapMode
-              setGoogleMapMode(next)
-              localStorage.setItem('googleMapMode', next)
-            }}
-          >
-            <TabsList>
-              <TabsTrigger value="roadmap">Roadmap (Clean)</TabsTrigger>
-              <TabsTrigger value="hybrid">Satellite</TabsTrigger>
-            </TabsList>
-          </Tabs>
-        ) : (
-          <Badge variant="outline" className="text-xs">Google Satellite</Badge>
-        )}
-        {device.location && (
-          <Button type="button" variant="outline" size="sm" onClick={onOpenNetworkMap}>
-            <Icon name="map" size={16} />
-            Lihat di Map
-          </Button>
-        )}
-      </div>
-    </div>
-
-    <div className="relative z-0 isolate h-72 w-full overflow-hidden rounded-md border border-border sm:h-80">
-      {useGoogleMaps ? (
-        <div key="gmaps" ref={gmapsContainerRef} className="h-full w-full" />
-      ) : (
-        <div key="leaflet" ref={mapContainerRef} className="h-full w-full" />
-      )}
-    </div>
-
-    <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-      <div className="grid grid-cols-2 gap-3 sm:max-w-md flex-1">
-        <div>
-          <Label htmlFor="device-lat" className="text-xs text-muted-foreground">Latitude</Label>
-          <Input
-            id="device-lat"
-            type="number"
-            step="any"
-            min={-90}
-            max={90}
-            readOnly={!isAdmin}
-            className="mt-1 font-mono text-sm"
-            placeholder="-6.208800"
-            value={draftLocation ? String(draftLocation.latitude) : ''}
-            onChange={(e) => {
-              if (e.target.value.trim() === '') return
-              const val = Number(e.target.value)
-              if (!Number.isFinite(val) || val < -90 || val > 90) return
-              setDraftLocation((prev) => ({
-                latitude: val,
-                longitude: prev?.longitude ?? mapCenter[1],
-              }))
-            }}
-          />
-        </div>
-        <div>
-          <Label htmlFor="device-lng" className="text-xs text-muted-foreground">Longitude</Label>
-          <Input
-            id="device-lng"
-            type="number"
-            step="any"
-            min={-180}
-            max={180}
-            readOnly={!isAdmin}
-            className="mt-1 font-mono text-sm"
-            placeholder="106.845600"
-            value={draftLocation ? String(draftLocation.longitude) : ''}
-            onChange={(e) => {
-              if (e.target.value.trim() === '') return
-              const val = Number(e.target.value)
-              if (!Number.isFinite(val) || val < -180 || val > 180) return
-              setDraftLocation((prev) => ({
-                latitude: prev?.latitude ?? mapCenter[0],
-                longitude: val,
-              }))
-            }}
-          />
-        </div>
-      </div>
-
-      {isAdmin && (
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={locating || saving}
-            onClick={handleUseCurrentGps}
-          >
-            {locating ? <Spinner data-icon="inline-start" /> : <Icon name="pin" size={16} />}
-            {locating ? 'Mencari GPS…' : 'Gunakan GPS'}
-          </Button>
           {device.location && (
+            <Button type="button" variant="outline" size="sm" onClick={onOpenNetworkMap}>
+              <Icon name="map" size={16} />
+              Lihat di Map
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="relative z-0 isolate h-72 w-full overflow-hidden rounded-md border border-border sm:h-80">
+        {useGoogleMaps ? (
+          <div key="gmaps" ref={gmapsContainerRef} className="h-full w-full" />
+        ) : (
+          <div key="leaflet" ref={mapContainerRef} className="h-full w-full" />
+        )}
+      </div>
+
+      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="grid grid-cols-2 gap-3 sm:max-w-md flex-1">
+          <div>
+            <Label htmlFor="device-lat" className="text-xs text-muted-foreground">Latitude</Label>
+            <Input
+              id="device-lat"
+              type="number"
+              step="any"
+              min={-90}
+              max={90}
+              readOnly={!isAdmin}
+              className="mt-1 font-mono text-sm"
+              placeholder="-6.208800"
+              value={draftLocation ? String(draftLocation.latitude) : ''}
+              onChange={(e) => {
+                if (e.target.value.trim() === '') return
+                const val = Number(e.target.value)
+                if (!Number.isFinite(val) || val < -90 || val > 90) return
+                setDraftLocation((prev) => ({
+                  latitude: val,
+                  longitude: prev?.longitude ?? mapCenter[1],
+                }))
+              }}
+            />
+          </div>
+          <div>
+            <Label htmlFor="device-lng" className="text-xs text-muted-foreground">Longitude</Label>
+            <Input
+              id="device-lng"
+              type="number"
+              step="any"
+              min={-180}
+              max={180}
+              readOnly={!isAdmin}
+              className="mt-1 font-mono text-sm"
+              placeholder="106.845600"
+              value={draftLocation ? String(draftLocation.longitude) : ''}
+              onChange={(e) => {
+                if (e.target.value.trim() === '') return
+                const val = Number(e.target.value)
+                if (!Number.isFinite(val) || val < -180 || val > 180) return
+                setDraftLocation((prev) => ({
+                  latitude: prev?.latitude ?? mapCenter[0],
+                  longitude: val,
+                }))
+              }}
+            />
+          </div>
+        </div>
+
+        {isAdmin && (
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               type="button"
               variant="outline"
               size="sm"
-              disabled={saving}
-              onClick={() => setConfirmDeleteOpen(true)}
+              disabled={locating || saving}
+              onClick={handleUseCurrentGps}
             >
-              <Icon name="trash" size={16} />
-              Hapus Titik
+              {locating ? <Spinner data-icon="inline-start" /> : <Icon name="pin" size={16} />}
+              {locating ? 'Mencari GPS…' : 'Gunakan GPS'}
             </Button>
-          )}
-          <Button
-            type="button"
-            size="sm"
-            disabled={saving || !draftLocation}
-            onClick={() => setConfirmSaveOpen(true)}
-          >
-            {saving ? <Spinner data-icon="inline-start" /> : <Icon name="check" size={16} />}
-            {saving ? 'Menyimpan…' : 'Konfirmasi & Simpan Lokasi'}
-          </Button>
-        </div>
-      )}
+            {device.location && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={saving}
+                onClick={() => setConfirmDeleteOpen(true)}
+              >
+                <Icon name="trash" size={16} />
+                Hapus Titik
+              </Button>
+            )}
+            <Button
+              type="button"
+              size="sm"
+              disabled={saving || !draftLocation}
+              onClick={() => setConfirmSaveOpen(true)}
+            >
+              {saving ? <Spinner data-icon="inline-start" /> : <Icon name="check" size={16} />}
+              {saving ? 'Menyimpan…' : 'Konfirmasi & Simpan Lokasi'}
+            </Button>
+          </div>
+        )}
+      </div>
+
+      <AlertDialog open={confirmSaveOpen} onOpenChange={setConfirmSaveOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Konfirmasi Titik Lokasi Perangkat</AlertDialogTitle>
+            <AlertDialogDescription>
+              Pastikan titik pin pada peta untuk perangkat{' '}
+              <strong className="font-mono text-foreground">
+                {device.deviceInfo?.serialNumber || device._id}
+              </strong>{' '}
+              sudah tepat di koordinat{' '}
+              <strong className="font-mono text-foreground">
+                {draftLocation?.latitude.toFixed(6)}, {draftLocation?.longitude.toFixed(6)}
+              </strong>{' '}
+              sebelum disimpan ke Network Map?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Periksa Lagi</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void handleConfirmSave()}>
+              Ya, Titik Sudah Tepat &amp; Simpan
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hapus Titik Lokasi Perangkat?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Titik perangkat{' '}
+              <strong className="font-mono text-foreground">
+                {device.deviceInfo?.serialNumber || device._id}
+              </strong>{' '}
+              akan dihapus dari peta live device.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void handleConfirmDelete()}>
+              Hapus Titik
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
-
-    <AlertDialog open={confirmSaveOpen} onOpenChange={setConfirmSaveOpen}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Konfirmasi Titik Lokasi Perangkat</AlertDialogTitle>
-          <AlertDialogDescription>
-            Pastikan titik pin pada peta untuk perangkat{' '}
-            <strong className="font-mono text-foreground">
-              {device.deviceInfo?.serialNumber || device._id}
-            </strong>{' '}
-            sudah tepat di koordinat{' '}
-            <strong className="font-mono text-foreground">
-              {draftLocation?.latitude.toFixed(6)}, {draftLocation?.longitude.toFixed(6)}
-            </strong>{' '}
-            sebelum disimpan ke Network Map?
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Periksa Lagi</AlertDialogCancel>
-          <AlertDialogAction onClick={() => void handleConfirmSave()}>
-            Ya, Titik Sudah Tepat &amp; Simpan
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-
-    <AlertDialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Hapus Titik Lokasi Perangkat?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Titik perangkat{' '}
-            <strong className="font-mono text-foreground">
-              {device.deviceInfo?.serialNumber || device._id}
-            </strong>{' '}
-            akan dihapus dari peta live device.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Batal</AlertDialogCancel>
-          <AlertDialogAction onClick={() => void handleConfirmDelete()}>
-            Hapus Titik
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  </div>
-)
+  )
 }
 
 

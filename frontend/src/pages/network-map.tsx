@@ -492,7 +492,7 @@ export default function NetworkMap() {
   const [mapSettingsLoaded, setMapSettingsLoaded] = useState(false)
   const [googleMapError, setGoogleMapError] = useState(false)
   const [googleMapMode, setGoogleMapMode] = useState<GoogleMapMode>(() =>
-    typeof window !== 'undefined' && localStorage.getItem('googleMapMode') === 'hybrid' ? 'hybrid' : 'roadmap'
+    typeof window !== 'undefined' && localStorage.getItem('googleMapMode') === 'roadmap' ? 'roadmap' : 'hybrid'
   )
   const { isDarkMode } = useTheme()
   const { user } = useAuth()
@@ -922,556 +922,570 @@ export default function NetworkMap() {
       window.setTimeout(() => mapRef.current?.invalidateSize(), 80)
     })()
     return () => { cancelled = true }
-}, [defaultZoom, liveDevices.length, mapCenter, mapSettingsLoaded, mapView, maxZoom, minZoom, nodes.length, updateMapObjects, updateTileLayer, useGoogleMaps])
-useEffect(() => { if (mapRef.current && !useGoogleMaps) updateTileLayer() }, [updateTileLayer, useGoogleMaps])
-useEffect(() => { if (mapRef.current && !useGoogleMaps) updateMapObjects() }, [updateMapObjects, useGoogleMaps])
+  }, [defaultZoom, liveDevices.length, mapCenter, mapSettingsLoaded, mapView, maxZoom, minZoom, nodes.length, updateMapObjects, updateTileLayer, useGoogleMaps])
+  useEffect(() => { if (mapRef.current && !useGoogleMaps) updateTileLayer() }, [updateTileLayer, useGoogleMaps])
+  useEffect(() => { if (mapRef.current && !useGoogleMaps) updateMapObjects() }, [updateMapObjects, useGoogleMaps])
 
-const openNewNode = () => {
-  const gCenter = gmapsMapRef.current?.getCenter?.()
-  const lCenter = mapRef.current?.getCenter?.()
-  const lat = gCenter ? Number(gCenter.lat()) : Number(lCenter?.lat ?? mapCenter[0])
-  const lng = gCenter ? Number(gCenter.lng()) : Number(lCenter?.lng ?? mapCenter[1])
-  setEditingNode(false)
-  setNodeEditor({
-    node_id: '', type: 'odp', name: '',
-    latitude: lat,
-    longitude: lng,
-    capacity: null, splitter: '', pppoe: '', notes: ''
-  })
-}
-const openNewEdge = () => {
-  setEditingEdge(false)
-  setEdgeEditor({
-    edge_id: '', source: nodes[0]?.node_id || '', target: nodes[1]?.node_id || '',
-    fiber_type: 'distribution', distance: null, waypoints: null, notes: ''
-  })
-}
-
-const saveNode = async (form: NodeForm) => {
-  try {
-    setSaving(true)
-    const response = editingNode
-      ? await mappingAPI.updateNode(form.node_id, form)
-      : await mappingAPI.createNode(form)
-    if (!response.success) throw new Error(response.message || 'Node could not be saved')
-    toast.success(editingNode ? 'Node updated' : 'Node added')
-    setNodeEditor(null)
-    setSelectedNode(null)
-    await loadData(false)
-  } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'Node could not be saved')
-  } finally {
-    setSaving(false)
+  const openNewNode = () => {
+    const gCenter = gmapsMapRef.current?.getCenter?.()
+    const lCenter = mapRef.current?.getCenter?.()
+    const lat = gCenter ? Number(gCenter.lat()) : Number(lCenter?.lat ?? mapCenter[0])
+    const lng = gCenter ? Number(gCenter.lng()) : Number(lCenter?.lng ?? mapCenter[1])
+    setEditingNode(false)
+    setNodeEditor({
+      node_id: '', type: 'odp', name: '',
+      latitude: lat,
+      longitude: lng,
+      capacity: null, splitter: '', pppoe: '', notes: ''
+    })
   }
-}
-const saveEdge = async (form: EdgeForm) => {
-  try {
-    setSaving(true)
-    const response = editingEdge
-      ? await mappingAPI.updateEdge(form.edge_id, form)
-      : await mappingAPI.createEdge(form)
-    if (!response.success) throw new Error(response.message || 'Cable could not be saved')
-    toast.success(editingEdge ? 'Cable updated' : 'Cable drawn')
-    setEdgeEditor(null)
-    setSelectedEdge(null)
-    await loadData(false)
-  } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'Cable could not be saved')
-  } finally {
-    setSaving(false)
+  const openNewEdge = () => {
+    setEditingEdge(false)
+    setEdgeEditor({
+      edge_id: '', source: nodes[0]?.node_id || '', target: nodes[1]?.node_id || '',
+      fiber_type: 'distribution', distance: null, waypoints: null, notes: ''
+    })
   }
-}
-const confirmDeleteNode = async () => {
-  if (!pendingDeleteNode) return
-  const node = pendingDeleteNode
-  setPendingDeleteNode(null)
-  try {
-    const response = await mappingAPI.deleteNode(node.node_id)
-    if (!response.success) throw new Error(response.message || 'Node could not be deleted')
-    toast.success('Node deleted')
-    setSelectedNode(null)
-    await loadData(false)
-  } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'Node could not be deleted')
+
+  const saveNode = async (form: NodeForm) => {
+    try {
+      setSaving(true)
+      const response = editingNode
+        ? await mappingAPI.updateNode(form.node_id, form)
+        : await mappingAPI.createNode(form)
+      if (!response.success) throw new Error(response.message || 'Node could not be saved')
+      toast.success(editingNode ? 'Node updated' : 'Node added')
+      setNodeEditor(null)
+      setSelectedNode(null)
+      await loadData(false)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Node could not be saved')
+    } finally {
+      setSaving(false)
+    }
   }
-}
-const confirmDeleteEdge = async () => {
-  if (!pendingDeleteEdge) return
-  const edge = pendingDeleteEdge
-  setPendingDeleteEdge(null)
-  try {
-    const response = await mappingAPI.deleteEdge(edge.edge_id)
-    if (!response.success) throw new Error(response.message || 'Cable could not be deleted')
-    toast.success('Cable deleted')
-    setSelectedEdge(null)
-    await loadData(false)
-  } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'Cable could not be deleted')
+  const saveEdge = async (form: EdgeForm) => {
+    try {
+      setSaving(true)
+      const response = editingEdge
+        ? await mappingAPI.updateEdge(form.edge_id, form)
+        : await mappingAPI.createEdge(form)
+      if (!response.success) throw new Error(response.message || 'Cable could not be saved')
+      toast.success(editingEdge ? 'Cable updated' : 'Cable drawn')
+      setEdgeEditor(null)
+      setSelectedEdge(null)
+      await loadData(false)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Cable could not be saved')
+    } finally {
+      setSaving(false)
+    }
   }
-}
+  const confirmDeleteNode = async () => {
+    if (!pendingDeleteNode) return
+    const node = pendingDeleteNode
+    setPendingDeleteNode(null)
+    try {
+      const response = await mappingAPI.deleteNode(node.node_id)
+      if (!response.success) throw new Error(response.message || 'Node could not be deleted')
+      toast.success('Node deleted')
+      setSelectedNode(null)
+      await loadData(false)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Node could not be deleted')
+    }
+  }
+  const confirmDeleteEdge = async () => {
+    if (!pendingDeleteEdge) return
+    const edge = pendingDeleteEdge
+    setPendingDeleteEdge(null)
+    try {
+      const response = await mappingAPI.deleteEdge(edge.edge_id)
+      if (!response.success) throw new Error(response.message || 'Cable could not be deleted')
+      toast.success('Cable deleted')
+      setSelectedEdge(null)
+      await loadData(false)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Cable could not be deleted')
+    }
+  }
 
-const nodeCounts = useMemo(() => NODE_TYPES.map((type) => ({
-  ...type, count: nodes.filter((node) => node.type === type.value).length
-})), [nodes])
-const onlineLiveCount = useMemo(
-  () => liveDevices.filter((dev) => isDeviceOnline(dev._lastInform)).length,
-  [liveDevices]
-)
+  const nodeCounts = useMemo(() => NODE_TYPES.map((type) => ({
+    ...type, count: nodes.filter((node) => node.type === type.value).length
+  })), [nodes])
+  const onlineLiveCount = useMemo(
+    () => liveDevices.filter((dev) => isDeviceOnline(dev._lastInform)).length,
+    [liveDevices]
+  )
 
-return (
-  <div className="page-shell">
-    <div className="page-frame flex flex-col gap-5">
-      <header className="page-header mb-0">
-        <div>
-          <p className="page-kicker">Outside plant</p>
-          <h1 className="page-title">Network topology</h1>
-          <p className="page-description">Kelola HTB, OLT, ODC, ODP, ONT, jalur kabel fiber, serta pantau titik live device langsung pada peta.</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {isAdmin && (
-            <Button type="button" size="sm" onClick={openNewNode}>
-              <Icon name="pin" size={16} />
-              Add node
-            </Button>
-          )}
-          {isAdmin && (
-            <Button type="button" variant="outline" size="sm" onClick={openNewEdge}>
-              <Icon name="signal" size={16} />
-              Draw cable
-            </Button>
-          )}
-          <Button type="button" variant="outline" size="sm" disabled={loading} onClick={() => void loadData(false)}>
-            {loading ? <Spinner data-icon="inline-start" /> : <Icon name="refresh" size={16} />}
-            Refresh
-          </Button>
-        </div>
-      </header>
-
-      <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 sm:gap-4">
-        <Card>
-          <CardHeader className="pb-2"><CardDescription className="metric-label">Nodes</CardDescription></CardHeader>
-          <CardContent><p className="metric-value mt-0">{nodes.length}</p></CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2"><CardDescription className="metric-label">Fiber cables</CardDescription></CardHeader>
-          <CardContent><p className="metric-value mt-0">{edges.length}</p></CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2"><CardDescription className="metric-label">OLT / ODC</CardDescription></CardHeader>
-          <CardContent><p className="metric-value mt-0">{nodes.filter((n) => n.type === 'olt' || n.type === 'odc').length}</p></CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2"><CardDescription className="metric-label">Live Devices</CardDescription></CardHeader>
-          <CardContent>
-            <p className="metric-value mt-0">
-              {liveDevices.length}
-              <span className="ml-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">
-                ({onlineLiveCount} online)
-              </span>
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2"><CardDescription className="metric-label">Last refresh</CardDescription></CardHeader>
-          <CardContent><p className="font-mono text-sm font-semibold">{lastRefresh?.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) || '—'}</p></CardContent>
-        </Card>
-      </section>
-
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-1.5">
-          {nodeCounts.map((entry) => (
-            <Badge key={entry.value} variant="secondary" className="font-mono">
-              {entry.label} {entry.count}
-            </Badge>
-          ))}
-          <button
-            type="button"
-            onClick={() => setShowLiveDevices((prev) => !prev)}
-            className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-0.5 font-mono text-xs font-semibold transition-colors ${showLiveDevices
-              ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-              : 'border-border bg-muted text-muted-foreground'
-              }`}
-          >
-            <span className={`size-2 rounded-full ${showLiveDevices ? 'bg-emerald-500' : 'bg-muted-foreground'}`} />
-            LIVE ONT {liveDevices.length}
-          </button>
-        </div>
-        <Tabs value={mapView} onValueChange={(value) => setMapView(value as 'map' | 'list')}>
-          <TabsList>
-            <TabsTrigger value="map">Map</TabsTrigger>
-            <TabsTrigger value="list">Inventory</TabsTrigger>
-          </TabsList>
-        </Tabs>
-      </div>
-
-      <div className="relative">
-        <Card className={`overflow-hidden ${mapView === 'map' ? '' : 'hidden'}`}>
-          <CardHeader className="flex flex-col gap-3 border-b border-border py-3.5 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <CardTitle className="text-base">Physical fiber map</CardTitle>
-              <CardDescription>Click a node, fiber cable, or live device marker (hijau = online, merah = offline) to inspect details.</CardDescription>
-            </div>
-            {useGoogleMaps ? (
-              <Tabs
-                value={googleMapMode}
-                onValueChange={(value) => {
-                  const next = value as GoogleMapMode
-                  setGoogleMapMode(next)
-                  localStorage.setItem('googleMapMode', next)
-                }}
-              >
-                <TabsList>
-                  <TabsTrigger value="roadmap">Roadmap (Clean)</TabsTrigger>
-                  <TabsTrigger value="hybrid">Satellite</TabsTrigger>
-                </TabsList>
-              </Tabs>
-            ) : (
-              <Badge variant="outline" className="w-fit text-xs">Google Satellite</Badge>
-            )}
-          </CardHeader>
-          <div className="relative z-0 isolate h-[58vh] min-h-[24rem] max-h-[54rem]">
-            {useGoogleMaps ? (
-              <div key="gmaps" ref={gmapsContainerRef} className="h-full w-full" />
-            ) : (
-              <div key="leaflet" ref={mapContainerRef} className="h-full w-full" />
-            )}
+  return (
+    <div className="page-shell">
+      <div className="page-frame flex flex-col gap-5">
+        <header className="page-header mb-0">
+          <div>
+            <p className="page-kicker">Outside plant</p>
+            <h1 className="page-title">Network topology</h1>
+            <p className="page-description">Kelola HTB, OLT, ODC, ODP, ONT, jalur kabel fiber, serta pantau titik live device langsung pada peta.</p>
           </div>
-        </Card>
+          <div className="flex flex-wrap items-center gap-2">
+            {isAdmin && (
+              <Button type="button" size="sm" onClick={openNewNode}>
+                <Icon name="pin" size={16} />
+                Add node
+              </Button>
+            )}
+            {isAdmin && (
+              <Button type="button" variant="outline" size="sm" onClick={openNewEdge}>
+                <Icon name="signal" size={16} />
+                Draw cable
+              </Button>
+            )}
+            <Button type="button" variant="outline" size="sm" disabled={loading} onClick={() => void loadData(false)}>
+              {loading ? <Spinner data-icon="inline-start" /> : <Icon name="refresh" size={16} />}
+              Refresh
+            </Button>
+          </div>
+        </header>
 
-        <section className={`flex flex-col gap-4 ${mapView === 'list' ? '' : 'hidden'}`}>
-          <Card className="overflow-hidden">
-            <CardHeader className="border-b border-border py-4">
-              <CardTitle className="text-base">Nodes ({nodes.length})</CardTitle>
-            </CardHeader>
-            <div className="hidden overflow-x-auto md:block">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>ID</TableHead>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Coordinates</TableHead>
-                    <TableHead className="text-right">Action</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {nodes.map((node) => (
-                    <TableRow key={node.node_id}>
-                      <TableCell className="font-mono text-sm">{node.node_id}</TableCell>
-                      <TableCell>{node.name}</TableCell>
-                      <TableCell>
-                        <span className="flex items-center gap-2">
-                          <Icon name={nodeIconName(node.type)} size={16} />
-                          {getTypeLabel(node.type)}
-                        </span>
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">{node.latitude.toFixed(6)}, {node.longitude.toFixed(6)}</TableCell>
-                      <TableCell className="text-right">
-                        <Button variant="ghost" size="sm" onClick={() => setSelectedNode(node)}>Details</Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {!nodes.length && (
-                    <TableRow>
-                      <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">No nodes mapped yet.</TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-            <div className="flex flex-col divide-y divide-border md:hidden">
-              {nodes.map((node) => (
-                <div key={node.node_id} className="flex items-center justify-between gap-3 p-4">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline">{getTypeLabel(node.type)}</Badge>
-                      <span className="truncate font-mono text-xs text-muted-foreground">{node.node_id}</span>
-                    </div>
-                    <p className="mt-1 truncate text-sm font-semibold">{node.name}</p>
-                    <p className="mt-0.5 font-mono text-xs text-muted-foreground">
-                      {node.latitude.toFixed(5)}, {node.longitude.toFixed(5)}
-                    </p>
-                  </div>
-                  <Button variant="outline" size="sm" onClick={() => setSelectedNode(node)}>Details</Button>
-                </div>
-              ))}
-              {!nodes.length && <p className="p-8 text-center text-sm text-muted-foreground">No nodes mapped yet.</p>}
-            </div>
+        <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 sm:gap-4">
+          <Card>
+            <CardHeader className="pb-2"><CardDescription className="metric-label">Nodes</CardDescription></CardHeader>
+            <CardContent><p className="metric-value mt-0">{nodes.length}</p></CardContent>
           </Card>
-
-          <Card className="overflow-hidden">
-            <CardHeader className="border-b border-border py-4">
-              <CardTitle className="text-base">Fiber cables ({edges.length})</CardTitle>
-            </CardHeader>
-            <div className="hidden overflow-x-auto md:block">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>ID</TableHead>
-                    <TableHead>Route</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Distance</TableHead>
-                    <TableHead className="text-right">Action</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {edges.map((edge) => (
-                    <TableRow key={edge.edge_id}>
-                      <TableCell className="font-mono text-sm">{edge.edge_id}</TableCell>
-                      <TableCell>{edge.source} → {edge.target}</TableCell>
-                      <TableCell>
-                        <span className="flex items-center gap-2">
-                          <span className="h-2 w-6 rounded" style={{ background: getFiberMeta(edge.fiber_type).color }} />
-                          {getFiberMeta(edge.fiber_type).label}
-                        </span>
-                      </TableCell>
-                      <TableCell>{edge.distance == null ? '—' : `${edge.distance} m`}</TableCell>
-                      <TableCell className="text-right">
-                        <Button variant="ghost" size="sm" onClick={() => setSelectedEdge(edge)}>Details</Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {!edges.length && (
-                    <TableRow>
-                      <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">No fiber cables drawn yet.</TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-            <div className="flex flex-col divide-y divide-border md:hidden">
-              {edges.map((edge) => (
-                <div key={edge.edge_id} className="flex items-center justify-between gap-3 p-4">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="h-2 w-4 rounded" style={{ background: getFiberMeta(edge.fiber_type).color }} />
-                      <span className="text-xs font-medium">{getFiberMeta(edge.fiber_type).label}</span>
-                      <span className="font-mono text-xs text-muted-foreground">{edge.distance == null ? '' : `${edge.distance} m`}</span>
-                    </div>
-                    <p className="mt-1 truncate font-mono text-xs font-semibold">{edge.edge_id}</p>
-                    <p className="mt-0.5 truncate text-xs text-muted-foreground">{edge.source} → {edge.target}</p>
-                  </div>
-                  <Button variant="outline" size="sm" onClick={() => setSelectedEdge(edge)}>Details</Button>
-                </div>
-              ))}
-              {!edges.length && <p className="p-8 text-center text-sm text-muted-foreground">No fiber cables drawn yet.</p>}
-            </div>
+          <Card>
+            <CardHeader className="pb-2"><CardDescription className="metric-label">Fiber cables</CardDescription></CardHeader>
+            <CardContent><p className="metric-value mt-0">{edges.length}</p></CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2"><CardDescription className="metric-label">OLT / ODC</CardDescription></CardHeader>
+            <CardContent><p className="metric-value mt-0">{nodes.filter((n) => n.type === 'olt' || n.type === 'odc').length}</p></CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2"><CardDescription className="metric-label">Live Devices</CardDescription></CardHeader>
+            <CardContent>
+              <p className="metric-value mt-0">
+                {liveDevices.length}
+                <span className="ml-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                  ({onlineLiveCount} online)
+                </span>
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2"><CardDescription className="metric-label">Last refresh</CardDescription></CardHeader>
+            <CardContent><p className="font-mono text-sm font-semibold">{lastRefresh?.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) || '—'}</p></CardContent>
           </Card>
         </section>
 
-        {loading && (
-          <div className="pointer-events-none absolute right-3 top-3 z-[500] flex items-center gap-2 rounded-md border border-border bg-card/95 px-3 py-2 text-xs font-semibold shadow-sm">
-            <Spinner className="size-3.5" />
-            Loading topology…
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {nodeCounts.map((entry) => (
+              <Badge key={entry.value} variant="secondary" className="font-mono">
+                {entry.label} {entry.count}
+              </Badge>
+            ))}
+            <button
+              type="button"
+              onClick={() => setShowLiveDevices((prev) => !prev)}
+              className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-0.5 font-mono text-xs font-semibold transition-colors ${showLiveDevices
+                ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                : 'border-border bg-muted text-muted-foreground'
+                }`}
+            >
+              <span className={`size-2 rounded-full ${showLiveDevices ? 'bg-emerald-500' : 'bg-muted-foreground'}`} />
+              LIVE ONT {liveDevices.length}
+            </button>
           </div>
-        )}
-      </div>
+          <Tabs value={mapView} onValueChange={(value) => setMapView(value as 'map' | 'list')}>
+            <TabsList>
+              <TabsTrigger value="map">Map</TabsTrigger>
+              <TabsTrigger value="list">Inventory</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </div>
 
-      {selectedNode && (
-        <ModalShell title={selectedNode.name} onClose={() => setSelectedNode(null)}>
-          <dl className="grid gap-4 sm:grid-cols-2">
-            <div><dt className="metric-label">Node ID</dt><dd className="mt-1 font-mono text-sm">{selectedNode.node_id}</dd></div>
-            <div><dt className="metric-label">Type</dt><dd className="mt-1 text-sm">{getTypeLabel(selectedNode.type)}</dd></div>
-            <div><dt className="metric-label">Coordinates</dt><dd className="mt-1 font-mono text-sm">{selectedNode.latitude}, {selectedNode.longitude}</dd></div>
-            <div><dt className="metric-label">Capacity</dt><dd className="mt-1 text-sm">{selectedNode.capacity ?? '—'}</dd></div>
-            <div><dt className="metric-label">Splitter</dt><dd className="mt-1 text-sm">{selectedNode.splitter || '—'}</dd></div>
-            <div><dt className="metric-label">PPPoE</dt><dd className="mt-1 text-sm">{selectedNode.pppoe || '—'}</dd></div>
-            {selectedNode.notes && <div className="sm:col-span-2"><dt className="metric-label">Notes</dt><dd className="mt-1 whitespace-pre-wrap text-sm">{selectedNode.notes}</dd></div>}
-          </dl>
-          <DialogFooter className="mt-4">
-            {isAdmin && (
-              <Button variant="outline" onClick={() => { setEditingNode(true); setNodeEditor({ ...selectedNode }); setSelectedNode(null) }}>
-                <Icon name="edit" size={16} />
-                Edit
-              </Button>
-            )}
-            {isAdmin && (
-              <Button variant="destructive" onClick={() => setPendingDeleteNode(selectedNode)}>
-                <Icon name="trash" size={16} />
-                Delete
-              </Button>
-            )}
-            <Button onClick={() => setSelectedNode(null)}>Close</Button>
-          </DialogFooter>
-        </ModalShell>
-      )}
-
-      {selectedEdge && (
-        <ModalShell title={selectedEdge.edge_id} onClose={() => setSelectedEdge(null)}>
-          <dl className="grid gap-4 sm:grid-cols-2">
-            <div><dt className="metric-label">Route</dt><dd className="mt-1 text-sm">{selectedEdge.source} → {selectedEdge.target}</dd></div>
-            <div><dt className="metric-label">Fiber type</dt><dd className="mt-1 text-sm">{getFiberMeta(selectedEdge.fiber_type).label}</dd></div>
-            <div><dt className="metric-label">Distance</dt><dd className="mt-1 text-sm">{selectedEdge.distance == null ? '—' : `${selectedEdge.distance} m`}</dd></div>
-            <div><dt className="metric-label">Waypoints</dt><dd className="mt-1 text-sm">{selectedEdge.waypoints?.length || 0}</dd></div>
-            {selectedEdge.notes && <div className="sm:col-span-2"><dt className="metric-label">Notes</dt><dd className="mt-1 whitespace-pre-wrap text-sm">{selectedEdge.notes}</dd></div>}
-          </dl>
-          <DialogFooter className="mt-4">
-            {isAdmin && (
-              <Button variant="outline" onClick={() => { setEditingEdge(true); setEdgeEditor({ ...selectedEdge }); setSelectedEdge(null) }}>
-                <Icon name="edit" size={16} />
-                Edit
-              </Button>
-            )}
-            {isAdmin && (
-              <Button variant="destructive" onClick={() => setPendingDeleteEdge(selectedEdge)}>
-                <Icon name="trash" size={16} />
-                Delete
-              </Button>
-            )}
-            <Button onClick={() => setSelectedEdge(null)}>Close</Button>
-          </DialogFooter>
-        </ModalShell>
-      )}
-
-      {selectedLiveDevice && (() => {
-        const online = isDeviceOnline(selectedLiveDevice._lastInform)
-        const ssids = getDeviceSsids(selectedLiveDevice)
-        return (
-          <ModalShell
-            title={`Live Device · ${selectedLiveDevice.SerialNumber || selectedLiveDevice._id}`}
-            onClose={() => setSelectedLiveDevice(null)}
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/40 px-3.5 py-2.5">
-              <div className="flex items-center gap-2">
-                <span className={`size-2.5 rounded-full ${online ? 'bg-emerald-500' : 'bg-red-500'}`} />
-                <Badge className={online ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30' : 'bg-red-500/15 text-red-700 dark:text-red-300 border border-red-500/30'}>
-                  {online ? 'Online' : 'Offline'}
-                </Badge>
+        <div className="relative">
+          <Card className={`overflow-hidden ${mapView === 'map' ? '' : 'hidden'}`}>
+            <CardHeader className="flex flex-col gap-3 border-b border-border py-3.5 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <CardTitle className="text-base">Physical fiber map</CardTitle>
+                <CardDescription>Click a node, fiber cable, or live device marker (hijau = online, merah = offline) to inspect details.</CardDescription>
               </div>
-              <span className="text-xs text-muted-foreground">
-                Last Inform: {selectedLiveDevice._lastInform ? formatDate(selectedLiveDevice._lastInform) : '—'}
-              </span>
+              {useGoogleMaps ? (
+                <Tabs
+                  value={googleMapMode}
+                  onValueChange={(value) => {
+                    const next = value as GoogleMapMode
+                    setGoogleMapMode(next)
+                    localStorage.setItem('googleMapMode', next)
+                  }}
+                >
+                  <TabsList>
+                    <TabsTrigger value="hybrid">Satellite</TabsTrigger>
+                    <TabsTrigger value="roadmap">Roadmap</TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              ) : (
+                <Badge variant="outline" className="w-fit text-xs">Google Satellite</Badge>
+              )}
+            </CardHeader>
+            <div className="relative z-0 isolate h-[58vh] min-h-[24rem] max-h-[54rem]">
+              {useGoogleMaps ? (
+                <div key="gmaps" ref={gmapsContainerRef} className="h-full w-full" />
+              ) : (
+                <div key="leaflet" ref={mapContainerRef} className="h-full w-full" />
+              )}
             </div>
+          </Card>
 
-            <dl className="mt-2 grid gap-4 sm:grid-cols-2">
-              <div>
-                <dt className="metric-label">Serial Number (SN)</dt>
-                <dd className="mt-1 flex items-center gap-1.5 font-mono text-sm font-semibold">
-                  <span className="break-all">{selectedLiveDevice.SerialNumber || '—'}</span>
-                  {selectedLiveDevice.SerialNumber && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      onClick={() => void copyToClipboard(selectedLiveDevice.SerialNumber!).then((ok) => ok && toast.success('SN disalin'))}
-                    >
-                      Copy
-                    </Button>
-                  )}
-                </dd>
+          <section className={`flex flex-col gap-4 ${mapView === 'list' ? '' : 'hidden'}`}>
+            <Card className="overflow-hidden">
+              <CardHeader className="border-b border-border py-4">
+                <CardTitle className="text-base">Nodes ({nodes.length})</CardTitle>
+              </CardHeader>
+              <div className="hidden overflow-x-auto md:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>ID</TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Coordinates</TableHead>
+                      <TableHead className="text-right">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {nodes.map((node) => (
+                      <TableRow key={node.node_id}>
+                        <TableCell className="font-mono text-sm">{node.node_id}</TableCell>
+                        <TableCell>{node.name}</TableCell>
+                        <TableCell>
+                          <span className="flex items-center gap-2">
+                            <Icon name={nodeIconName(node.type)} size={16} />
+                            {getTypeLabel(node.type)}
+                          </span>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{node.latitude.toFixed(6)}, {node.longitude.toFixed(6)}</TableCell>
+                        <TableCell className="text-right">
+                          <Button variant="ghost" size="sm" onClick={() => setSelectedNode(node)}>Details</Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {!nodes.length && (
+                      <TableRow>
+                        <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">No nodes mapped yet.</TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
               </div>
-              <div>
-                <dt className="metric-label">Device ID</dt>
-                <dd className="mt-1 flex items-center gap-1.5 font-mono text-xs">
-                  <span className="break-all">{selectedLiveDevice._id}</span>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => void copyToClipboard(selectedLiveDevice._id).then((ok) => ok && toast.success('Device ID disalin'))}
-                  >
-                    Copy
-                  </Button>
-                </dd>
+              <div className="flex flex-col divide-y divide-border md:hidden">
+                {nodes.map((node) => (
+                  <div key={node.node_id} className="flex items-center justify-between gap-3 p-4">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline">{getTypeLabel(node.type)}</Badge>
+                        <span className="truncate font-mono text-xs text-muted-foreground">{node.node_id}</span>
+                      </div>
+                      <p className="mt-1 truncate text-sm font-semibold">{node.name}</p>
+                      <p className="mt-0.5 font-mono text-xs text-muted-foreground">
+                        {node.latitude.toFixed(5)}, {node.longitude.toFixed(5)}
+                      </p>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={() => setSelectedNode(node)}>Details</Button>
+                  </div>
+                ))}
+                {!nodes.length && <p className="p-8 text-center text-sm text-muted-foreground">No nodes mapped yet.</p>}
               </div>
-              <div>
-                <dt className="metric-label">IP TR-069</dt>
-                <dd className="mt-1 flex items-center gap-1.5 font-mono text-sm text-primary">
-                  <span>{selectedLiveDevice.ipTr069 || '—'}</span>
-                  {selectedLiveDevice.ipTr069 && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      onClick={() => void copyToClipboard(selectedLiveDevice.ipTr069!).then((ok) => ok && toast.success('IP TR-069 disalin'))}
-                    >
-                      Copy
-                    </Button>
-                  )}
-                </dd>
+            </Card>
+
+            <Card className="overflow-hidden">
+              <CardHeader className="border-b border-border py-4">
+                <CardTitle className="text-base">Fiber cables ({edges.length})</CardTitle>
+              </CardHeader>
+              <div className="hidden overflow-x-auto md:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>ID</TableHead>
+                      <TableHead>Route</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Distance</TableHead>
+                      <TableHead className="text-right">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {edges.map((edge) => (
+                      <TableRow key={edge.edge_id}>
+                        <TableCell className="font-mono text-sm">{edge.edge_id}</TableCell>
+                        <TableCell>{edge.source} → {edge.target}</TableCell>
+                        <TableCell>
+                          <span className="flex items-center gap-2">
+                            <span className="h-2 w-6 rounded" style={{ background: getFiberMeta(edge.fiber_type).color }} />
+                            {getFiberMeta(edge.fiber_type).label}
+                          </span>
+                        </TableCell>
+                        <TableCell>{edge.distance == null ? '—' : `${edge.distance} m`}</TableCell>
+                        <TableCell className="text-right">
+                          <Button variant="ghost" size="sm" onClick={() => setSelectedEdge(edge)}>Details</Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {!edges.length && (
+                      <TableRow>
+                        <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">No fiber cables drawn yet.</TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
               </div>
-              <div>
-                <dt className="metric-label">PPPoE Username</dt>
-                <dd className="mt-1 flex items-center gap-1.5 font-mono text-sm">
-                  <span className="break-all">{selectedLiveDevice.pppoe || '—'}</span>
-                  {selectedLiveDevice.pppoe && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      onClick={() => void copyToClipboard(selectedLiveDevice.pppoe!).then((ok) => ok && toast.success('PPPoE disalin'))}
-                    >
-                      Copy
-                    </Button>
-                  )}
-                </dd>
+              <div className="flex flex-col divide-y divide-border md:hidden">
+                {edges.map((edge) => (
+                  <div key={edge.edge_id} className="flex items-center justify-between gap-3 p-4">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="h-2 w-4 rounded" style={{ background: getFiberMeta(edge.fiber_type).color }} />
+                        <span className="text-xs font-medium">{getFiberMeta(edge.fiber_type).label}</span>
+                        <span className="font-mono text-xs text-muted-foreground">{edge.distance == null ? '' : `${edge.distance} m`}</span>
+                      </div>
+                      <p className="mt-1 truncate font-mono text-xs font-semibold">{edge.edge_id}</p>
+                      <p className="mt-0.5 truncate text-xs text-muted-foreground">{edge.source} → {edge.target}</p>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={() => setSelectedEdge(edge)}>Details</Button>
+                  </div>
+                ))}
+                {!edges.length && <p className="p-8 text-center text-sm text-muted-foreground">No fiber cables drawn yet.</p>}
               </div>
-              <div className="sm:col-span-2">
-                <dt className="metric-label">SSID</dt>
-                <dd className="mt-1 break-all font-mono text-sm">{ssids}</dd>
-              </div>
-              <div className="sm:col-span-2">
-                <dt className="metric-label">Coordinates</dt>
-                <dd className="mt-1 font-mono text-xs text-muted-foreground">
-                  {selectedLiveDevice.latitude.toFixed(6)}, {selectedLiveDevice.longitude.toFixed(6)}
-                </dd>
-              </div>
+            </Card>
+          </section>
+
+          {loading && (
+            <div className="pointer-events-none absolute right-3 top-3 z-[500] flex items-center gap-2 rounded-md border border-border bg-card/95 px-3 py-2 text-xs font-semibold shadow-sm">
+              <Spinner className="size-3.5" />
+              Loading topology…
+            </div>
+          )}
+        </div>
+
+        {selectedNode && (
+          <ModalShell title={selectedNode.name} onClose={() => setSelectedNode(null)}>
+            <dl className="grid gap-4 sm:grid-cols-2">
+              <div><dt className="metric-label">Node ID</dt><dd className="mt-1 font-mono text-sm">{selectedNode.node_id}</dd></div>
+              <div><dt className="metric-label">Type</dt><dd className="mt-1 text-sm">{getTypeLabel(selectedNode.type)}</dd></div>
+              <div><dt className="metric-label">Coordinates</dt><dd className="mt-1 font-mono text-sm">{selectedNode.latitude}, {selectedNode.longitude}</dd></div>
+              <div><dt className="metric-label">Capacity</dt><dd className="mt-1 text-sm">{selectedNode.capacity ?? '—'}</dd></div>
+              <div><dt className="metric-label">Splitter</dt><dd className="mt-1 text-sm">{selectedNode.splitter || '—'}</dd></div>
+              <div><dt className="metric-label">PPPoE</dt><dd className="mt-1 text-sm">{selectedNode.pppoe || '—'}</dd></div>
+              {selectedNode.notes && <div className="sm:col-span-2"><dt className="metric-label">Notes</dt><dd className="mt-1 whitespace-pre-wrap text-sm">{selectedNode.notes}</dd></div>}
             </dl>
-
-            <DialogFooter className="mt-4 gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  const id = selectedLiveDevice._id
-                  setSelectedLiveDevice(null)
-                  navigate(`/devices/detail?id=${encodeURIComponent(id)}`)
-                }}
-              >
-                <Icon name="external" size={16} />
-                Detail Perangkat
-              </Button>
-              <Button type="button" onClick={() => setSelectedLiveDevice(null)}>
-                Tutup
-              </Button>
+            <DialogFooter className="mt-4">
+              {isAdmin && (
+                <Button variant="outline" onClick={() => { setEditingNode(true); setNodeEditor({ ...selectedNode }); setSelectedNode(null) }}>
+                  <Icon name="edit" size={16} />
+                  Edit
+                </Button>
+              )}
+              {isAdmin && (
+                <Button variant="destructive" onClick={() => setPendingDeleteNode(selectedNode)}>
+                  <Icon name="trash" size={16} />
+                  Delete
+                </Button>
+              )}
+              <Button onClick={() => setSelectedNode(null)}>Close</Button>
             </DialogFooter>
           </ModalShell>
-        )
-      })()}
+        )}
 
-      {nodeEditor && <NodeEditor initial={nodeEditor} editing={editingNode} saving={saving} onClose={() => setNodeEditor(null)} onSave={(value) => void saveNode(value)} />}
-      {edgeEditor && <EdgeEditor initial={edgeEditor} nodes={nodes} editing={editingEdge} saving={saving} onClose={() => setEdgeEditor(null)} onSave={(value) => void saveEdge(value)} />}
+        {selectedEdge && (
+          <ModalShell title={selectedEdge.edge_id} onClose={() => setSelectedEdge(null)}>
+            <dl className="grid gap-4 sm:grid-cols-2">
+              <div><dt className="metric-label">Route</dt><dd className="mt-1 text-sm">{selectedEdge.source} → {selectedEdge.target}</dd></div>
+              <div><dt className="metric-label">Fiber type</dt><dd className="mt-1 text-sm">{getFiberMeta(selectedEdge.fiber_type).label}</dd></div>
+              <div><dt className="metric-label">Distance</dt><dd className="mt-1 text-sm">{selectedEdge.distance == null ? '—' : `${selectedEdge.distance} m`}</dd></div>
+              <div><dt className="metric-label">Waypoints</dt><dd className="mt-1 text-sm">{selectedEdge.waypoints?.length || 0}</dd></div>
+              {selectedEdge.notes && <div className="sm:col-span-2"><dt className="metric-label">Notes</dt><dd className="mt-1 whitespace-pre-wrap text-sm">{selectedEdge.notes}</dd></div>}
+            </dl>
+            <DialogFooter className="mt-4">
+              {isAdmin && (
+                <Button variant="outline" onClick={() => { setEditingEdge(true); setEdgeEditor({ ...selectedEdge }); setSelectedEdge(null) }}>
+                  <Icon name="edit" size={16} />
+                  Edit
+                </Button>
+              )}
+              {isAdmin && (
+                <Button variant="destructive" onClick={() => setPendingDeleteEdge(selectedEdge)}>
+                  <Icon name="trash" size={16} />
+                  Delete
+                </Button>
+              )}
+              <Button onClick={() => setSelectedEdge(null)}>Close</Button>
+            </DialogFooter>
+          </ModalShell>
+        )}
 
-      <AlertDialog open={Boolean(pendingDeleteNode)} onOpenChange={(open) => { if (!open) setPendingDeleteNode(null) }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete node {pendingDeleteNode?.node_id}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Every fiber cable connected to this node will also be deleted. This action cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void confirmDeleteNode()}>Delete node</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        {selectedLiveDevice && (() => {
+          const online = isDeviceOnline(selectedLiveDevice._lastInform)
+          const ssids = getDeviceSsids(selectedLiveDevice)
+          return (
+            <ModalShell
+              title={`Live Device · ${selectedLiveDevice.SerialNumber || selectedLiveDevice._id}`}
+              onClose={() => setSelectedLiveDevice(null)}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/40 px-3.5 py-2.5">
+                <div className="flex items-center gap-2">
+                  <span className={`size-2.5 rounded-full ${online ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                  <Badge className={online ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30' : 'bg-red-500/15 text-red-700 dark:text-red-300 border border-red-500/30'}>
+                    {online ? 'Online' : 'Offline'}
+                  </Badge>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  Last Inform: {selectedLiveDevice._lastInform ? formatDate(selectedLiveDevice._lastInform) : '—'}
+                </span>
+              </div>
 
-      <AlertDialog open={Boolean(pendingDeleteEdge)} onOpenChange={(open) => { if (!open) setPendingDeleteEdge(null) }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete cable {pendingDeleteEdge?.edge_id}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This fiber route will be permanently removed from the topology map.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void confirmDeleteEdge()}>Delete cable</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+              <dl className="mt-2 grid gap-4 sm:grid-cols-2">
+                <div>
+                  <dt className="metric-label">Serial Number (SN)</dt>
+                  <dd className="mt-1 flex items-center gap-1.5 font-mono text-sm font-semibold">
+                    <span className="break-all">{selectedLiveDevice.SerialNumber || '—'}</span>
+                    {selectedLiveDevice.SerialNumber && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => void copyToClipboard(selectedLiveDevice.SerialNumber!).then((ok) => ok && toast.success('SN disalin'))}
+                      >
+                        Copy
+                      </Button>
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="metric-label">Device ID</dt>
+                  <dd className="mt-1 flex items-center gap-1.5 font-mono text-xs">
+                    <span className="break-all">{selectedLiveDevice._id}</span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => void copyToClipboard(selectedLiveDevice._id).then((ok) => ok && toast.success('Device ID disalin'))}
+                    >
+                      Copy
+                    </Button>
+                  </dd>
+                </div>
+                <div>
+                  <dt className="metric-label">IP TR-069</dt>
+                  <dd className="mt-1 flex items-center gap-1.5 font-mono text-sm text-primary">
+                    <span>{selectedLiveDevice.ipTr069 || '—'}</span>
+                    {selectedLiveDevice.ipTr069 && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => void copyToClipboard(selectedLiveDevice.ipTr069!).then((ok) => ok && toast.success('IP TR-069 disalin'))}
+                      >
+                        Copy
+                      </Button>
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="metric-label">PPPoE Username</dt>
+                  <dd className="mt-1 flex items-center gap-1.5 font-mono text-sm">
+                    <span className="break-all">{selectedLiveDevice.pppoe || '—'}</span>
+                    {selectedLiveDevice.pppoe && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => void copyToClipboard(selectedLiveDevice.pppoe!).then((ok) => ok && toast.success('PPPoE disalin'))}
+                      >
+                        Copy
+                      </Button>
+                    )}
+                  </dd>
+                </div>
+                <div className="sm:col-span-2">
+                  <dt className="metric-label">SSID</dt>
+                  <dd className="mt-1 break-all font-mono text-sm">{ssids}</dd>
+                </div>
+                <div className="sm:col-span-2">
+                  <dt className="metric-label">Coordinates</dt>
+                  <dd className="mt-1 font-mono text-xs text-muted-foreground">
+                    {selectedLiveDevice.latitude.toFixed(6)}, {selectedLiveDevice.longitude.toFixed(6)}
+                  </dd>
+                </div>
+              </dl>
+
+              <DialogFooter className="mt-4 gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  asChild
+                >
+                  <a
+                    href={`https://www.google.com/maps?q=${selectedLiveDevice.latitude},${selectedLiveDevice.longitude}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <Icon name="map" size={16} />
+                    View to Map
+                  </a>
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    const id = selectedLiveDevice._id
+                    setSelectedLiveDevice(null)
+                    navigate(`/devices/detail?id=${encodeURIComponent(id)}`)
+                  }}
+                >
+                  <Icon name="external" size={16} />
+                  Detail Perangkat
+                </Button>
+                <Button type="button" onClick={() => setSelectedLiveDevice(null)}>
+                  Tutup
+                </Button>
+              </DialogFooter>
+            </ModalShell>
+          )
+        })()}
+
+        {nodeEditor && <NodeEditor initial={nodeEditor} editing={editingNode} saving={saving} onClose={() => setNodeEditor(null)} onSave={(value) => void saveNode(value)} />}
+        {edgeEditor && <EdgeEditor initial={edgeEditor} nodes={nodes} editing={editingEdge} saving={saving} onClose={() => setEdgeEditor(null)} onSave={(value) => void saveEdge(value)} />}
+
+        <AlertDialog open={Boolean(pendingDeleteNode)} onOpenChange={(open) => { if (!open) setPendingDeleteNode(null) }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete node {pendingDeleteNode?.node_id}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Every fiber cable connected to this node will also be deleted. This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={() => void confirmDeleteNode()}>Delete node</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        <AlertDialog open={Boolean(pendingDeleteEdge)} onOpenChange={(open) => { if (!open) setPendingDeleteEdge(null) }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete cable {pendingDeleteEdge?.edge_id}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This fiber route will be permanently removed from the topology map.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={() => void confirmDeleteEdge()}>Delete cable</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
     </div>
-  </div>
-)
+  )
 }
