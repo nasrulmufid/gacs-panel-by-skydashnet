@@ -925,7 +925,7 @@ export default function NetworkMap() {
                 </TabsList>
               </Tabs>
             </CardHeader>
-            <div className="h-[58vh] min-h-[24rem] max-h-[54rem]">
+            <div className="relative z-0 isolate h-[58vh] min-h-[24rem] max-h-[54rem]">
               <div ref={mapContainerRef} className="h-full w-full" />
             </div>
           </Card>

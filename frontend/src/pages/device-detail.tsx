@@ -946,7 +946,7 @@ function DeviceMapLocationCard({
         </div>
       </div>
 
-      <div className="relative h-72 w-full overflow-hidden rounded-md border border-border sm:h-80">
+      <div className="relative z-0 isolate h-72 w-full overflow-hidden rounded-md border border-border sm:h-80">
         <div ref={mapContainerRef} className="h-full w-full" />
       </div>
 

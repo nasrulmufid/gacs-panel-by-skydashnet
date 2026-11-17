@@ -186,6 +186,11 @@
   textarea:disabled {
     cursor: not-allowed;
   }
+
+  .leaflet-container {
+    isolation: isolate;
+    z-index: 0;
+  }
 }
 
 @layer components {
