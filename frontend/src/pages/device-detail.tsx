@@ -8,7 +8,6 @@ import { devicesAPI, mapSettingsAPI } from '@/lib/api'
 import { copyToClipboard, formatDate } from '@/lib/utils'
 import { Icon } from '@/components/ui/icon'
 import { useAuth } from '@/contexts/auth-context'
-import { useTheme } from '@/contexts/theme-context'
 import 'leaflet/dist/leaflet.css'
 
 const leafletModulePromise = import('leaflet')
@@ -622,22 +621,10 @@ function EditWifiModal({
   )
 }
 
-function getPickerTileConfig(basemap: 'osm' | 'google', dark: boolean) {
-  if (basemap === 'google') {
-    return {
-      url: 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&hl=id&gl=id',
-      attribution: 'Map data &copy; Google'
-    }
-  }
-  if (dark) {
-    return {
-      url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-      attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
-    }
-  }
+function getPickerTileConfig() {
   return {
-    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution: '&copy; OpenStreetMap contributors'
+    url: 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=id&gl=id',
+    attribution: 'Map data &copy; Google'
   }
 }
 
@@ -652,13 +639,8 @@ function DeviceMapLocationCard({
   onLocationSaved: (location: { latitude: number; longitude: number } | null) => void
   onOpenNetworkMap: () => void
 }) {
-  const { isDarkMode } = useTheme()
   const toast = useToast()
 
-  const [basemap, setBasemap] = useState<'osm' | 'google'>(() => {
-    const saved = typeof window !== 'undefined' ? localStorage.getItem('networkMapBasemap') : null
-    return saved === 'google' ? 'google' : 'osm'
-  })
   const [mapCenter, setMapCenter] = useState<[number, number]>(() =>
     device.location ? [device.location.latitude, device.location.longitude] : [-6.2088, 106.8456]
   )
@@ -727,9 +709,9 @@ function DeviceMapLocationCard({
     if (tileLayerRef.current) {
       map.removeLayer(tileLayerRef.current)
     }
-    const tile = getPickerTileConfig(basemap, isDarkMode)
-    tileLayerRef.current = L.tileLayer(tile.url, { attribution: tile.attribution }).addTo(map)
-  }, [basemap, isDarkMode])
+    const tile = getPickerTileConfig()
+    tileLayerRef.current = L.tileLayer(tile.url, { attribution: tile.attribution, maxZoom: 20 }).addTo(map)
+  }, [])
 
   const syncMarker = useCallback((loc: { latitude: number; longitude: number } | null) => {
     const L = leafletRef.current
@@ -924,19 +906,7 @@ function DeviceMapLocationCard({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Tabs
-            value={basemap}
-            onValueChange={(value) => {
-              const next = value as 'osm' | 'google'
-              setBasemap(next)
-              localStorage.setItem('networkMapBasemap', next)
-            }}
-          >
-            <TabsList>
-              <TabsTrigger value="osm">OSM</TabsTrigger>
-              <TabsTrigger value="google">Google</TabsTrigger>
-            </TabsList>
-          </Tabs>
+          <Badge variant="outline" className="text-xs">Google Satellite</Badge>
           {device.location && (
             <Button type="button" variant="outline" size="sm" onClick={onOpenNetworkMap}>
               <Icon name="map" size={16} />

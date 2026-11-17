@@ -59,7 +59,6 @@ const leafletModulePromise = import('leaflet')
 
 type NodeType = 'htb' | 'olt' | 'odc' | 'odp' | 'ont' | 'server'
 type FiberType = 'backbone' | 'feeder' | 'distribution' | 'drop' | 'patch'
-type Basemap = 'osm' | 'google'
 
 interface MapNode {
   id: number
@@ -148,22 +147,10 @@ function getFiberMeta(type: FiberType) {
   return FIBER_TYPES.find((entry) => entry.value === type) || FIBER_TYPES[2]
 }
 
-function getTileUrlAndAttrib(basemap: Basemap, dark: boolean) {
-  if (basemap === 'google') {
-    return {
-      url: 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&hl=id&gl=id',
-      attribution: 'Map data &copy; Google'
-    }
-  }
-  if (dark) {
-    return {
-      url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-      attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
-    }
-  }
+function getTileUrlAndAttrib() {
   return {
-    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution: '&copy; OpenStreetMap contributors'
+    url: 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=id&gl=id',
+    attribution: 'Map data &copy; Google'
   }
 }
 
@@ -492,7 +479,6 @@ export default function NetworkMap() {
   const [defaultZoom, setDefaultZoom] = useState(12)
   const [minZoom, setMinZoom] = useState(5)
   const [maxZoom, setMaxZoom] = useState(18)
-  const [basemap, setBasemap] = useState<Basemap>('osm')
   const { isDarkMode } = useTheme()
   const { user } = useAuth()
   const toast = useToast()
@@ -589,10 +575,6 @@ export default function NetworkMap() {
   }, [toast])
 
   useEffect(() => { void loadData() }, [loadData])
-  useEffect(() => {
-    const saved = localStorage.getItem('networkMapBasemap')
-    if (saved === 'osm' || saved === 'google') setBasemap(saved)
-  }, [])
   useEffect(() => () => {
     mapRef.current?.remove()
     mapRef.current = null
@@ -607,9 +589,9 @@ export default function NetworkMap() {
     const map = mapRef.current
     if (!L || !map) return
     if (tileLayerRef.current) map.removeLayer(tileLayerRef.current)
-    const tile = getTileUrlAndAttrib(basemap, isDarkMode)
-    tileLayerRef.current = L.tileLayer(tile.url, { attribution: tile.attribution }).addTo(map)
-  }, [basemap, isDarkMode])
+    const tile = getTileUrlAndAttrib()
+    tileLayerRef.current = L.tileLayer(tile.url, { attribution: tile.attribution, maxZoom: 20 }).addTo(map)
+  }, [])
 
   const updateMapObjects = useCallback(() => {
     const L = leafletRef.current
@@ -911,19 +893,7 @@ export default function NetworkMap() {
                 <CardTitle className="text-base">Physical fiber map</CardTitle>
                 <CardDescription>Click a node, fiber cable, or live device marker (hijau = online, merah = offline) to inspect details.</CardDescription>
               </div>
-              <Tabs
-                value={basemap}
-                onValueChange={(value) => {
-                  const next = value as Basemap
-                  setBasemap(next)
-                  localStorage.setItem('networkMapBasemap', next)
-                }}
-              >
-                <TabsList>
-                  <TabsTrigger value="osm">OpenStreetMap</TabsTrigger>
-                  <TabsTrigger value="google">Google Maps</TabsTrigger>
-                </TabsList>
-              </Tabs>
+              <Badge variant="outline" className="w-fit text-xs">Google Satellite</Badge>
             </CardHeader>
             <div className="relative z-0 isolate h-[58vh] min-h-[24rem] max-h-[54rem]">
               <div ref={mapContainerRef} className="h-full w-full" />
