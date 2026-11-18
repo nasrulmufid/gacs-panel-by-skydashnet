@@ -235,6 +235,12 @@ export const devicesAPI = {
       location
     ),
 
+  bulkUpdateLocations: (items: Array<{ serialNumber: string; latitude: number; longitude: number }>) =>
+    apiClient.post<{ updated: number; notFound: string[]; invalidCount: number }>(
+      '/devices/bulk-location',
+      { items }
+    ),
+
   updateWifiConfig: (deviceId: string, index: number, formData: any) => {
     return apiClient.post(`/devices/${encodeURIComponent(deviceId)}/update-wifi`, { index, formData });
   },

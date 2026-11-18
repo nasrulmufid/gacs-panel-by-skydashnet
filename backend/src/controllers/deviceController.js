@@ -343,6 +343,92 @@ class DeviceController {
     }
   }
 
+  static async bulkUpdateLocations(req, res) {
+    try {
+      const items = req.body?.items;
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json(
+          createErrorResponse('Data CSV kosong atau tidak valid')
+        );
+      }
+
+      if (items.length > 10000) {
+        return res.status(400).json(
+          createErrorResponse('Maksimal 10.000 baris koordinat per upload CSV')
+        );
+      }
+
+      const devices = await DeviceService.getDevices();
+      const bySerial = new Map();
+      const byId = new Map();
+      for (const dev of devices) {
+        if (dev.SerialNumber) {
+          bySerial.set(String(dev.SerialNumber).trim().toUpperCase(), dev._id);
+        }
+        if (dev._id) {
+          byId.set(String(dev._id).trim().toUpperCase(), dev._id);
+        }
+      }
+
+      const deduped = new Map();
+      const notFoundSet = new Set();
+      let invalidCount = 0;
+
+      for (const item of items) {
+        const serial = typeof item?.serialNumber === 'string'
+          ? item.serialNumber.trim()
+          : String(item?.serialNumber ?? '').trim();
+        const rawLat = item?.latitude;
+        const rawLng = item?.longitude;
+        const lat = (rawLat === null || rawLat === undefined || rawLat === '' || typeof rawLat === 'boolean')
+          ? Number.NaN
+          : Number(rawLat);
+        const lng = (rawLng === null || rawLng === undefined || rawLng === '' || typeof rawLng === 'boolean')
+          ? Number.NaN
+          : Number(rawLng);
+
+        if (
+          !serial ||
+          !Number.isFinite(lat) || lat < -90 || lat > 90 ||
+          !Number.isFinite(lng) || lng < -180 || lng > 180
+        ) {
+          invalidCount += 1;
+          continue;
+        }
+
+        const lookupKey = serial.toUpperCase();
+        const deviceId = bySerial.get(lookupKey) ?? byId.get(lookupKey);
+        if (!deviceId) {
+          notFoundSet.add(serial);
+          continue;
+        }
+
+        deduped.set(deviceId, {
+          deviceId,
+          latitude: lat,
+          longitude: lng
+        });
+      }
+
+      const entries = Array.from(deduped.values());
+      const updated = await DeviceProfile.bulkUpsertLocations(entries);
+      const notFound = Array.from(notFoundSet);
+
+      return res.json(
+        createResponse(`${updated} koordinat perangkat berhasil diperbarui`, {
+          updated,
+          notFound,
+          invalidCount
+        })
+      );
+    } catch (error) {
+      console.error('Error bulk updating device locations:', error);
+      return res.status(500).json(
+        createErrorResponse('Gagal memperbarui koordinat perangkat secara massal', error.message)
+      );
+    }
+  }
+
   static async updateCredentials(req, res) {
     const { id } = req.params;
     const { type, password } = req.body;

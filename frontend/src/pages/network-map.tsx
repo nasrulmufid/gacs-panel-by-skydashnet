@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { useAuth } from '@/contexts/auth-context'
 import { useTheme } from '@/contexts/theme-context'
@@ -33,6 +33,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -94,6 +95,141 @@ interface MapEdge {
 type NodeForm = Omit<MapNode, 'id'>
 type EdgeForm = Omit<MapEdge, 'id'>
 type PinnedLiveDevice = Device & { latitude: number; longitude: number }
+
+interface CsvLocationRow {
+  line: number
+  serialNumber: string
+  latitude: number | null
+  longitude: number | null
+  valid: boolean
+  error?: string
+}
+
+const CSV_TEMPLATE_CONTENT = [
+  'serial_number,latitude,longitude',
+  'ZTEGC8000001,-6.208800,106.845600',
+  'HWTC12345678,-6.214620,106.845130',
+].join('\n')
+
+function countDelimiterOutsideQuotes(line: string, delimiter: string): number {
+  let count = 0
+  let inQuotes = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        i += 1
+      } else {
+        inQuotes = !inQuotes
+      }
+    } else if (!inQuotes && ch === delimiter) {
+      count += 1
+    }
+  }
+  return count
+}
+
+function splitCsvLine(line: string, delimiter: string): string[] {
+  const cells: string[] = []
+  let current = ''
+  let inQuotes = false
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"'
+        i += 1
+      } else {
+        inQuotes = !inQuotes
+      }
+    } else if (!inQuotes && ch === delimiter) {
+      cells.push(current.trim())
+      current = ''
+    } else {
+      current += ch
+    }
+  }
+  cells.push(current.trim())
+  return cells
+}
+
+function parseCoordinateValue(raw: string | undefined, delimiter: string): number {
+  if (!raw) return Number.NaN
+  let normalized = raw.trim()
+  if (!normalized) return Number.NaN
+  if (delimiter === ';' && normalized.includes(',') && !normalized.includes('.')) {
+    normalized = normalized.replace(',', '.')
+  }
+  return Number(normalized)
+}
+
+function parseLocationCsv(rawText: string): CsvLocationRow[] {
+  const cleaned = rawText.replace(/^\uFEFF/, '')
+  const rawLines = cleaned.split(/\r?\n/)
+  const nonEmptyLines = rawLines
+    .map((text, idx) => ({ text: text.trim(), line: idx + 1 }))
+    .filter((entry) => entry.text.length > 0)
+
+  if (nonEmptyLines.length === 0) return []
+
+  const sampleText = nonEmptyLines.slice(0, 5).map((item) => item.text).join('\n')
+  const semiCount = countDelimiterOutsideQuotes(sampleText, ';')
+  const commaCount = countDelimiterOutsideQuotes(sampleText, ',')
+  const delimiter = semiCount > commaCount ? ';' : ','
+
+  let startIndex = 0
+  let serialIdx = 0
+  let latIdx = 1
+  let lngIdx = 2
+
+  const firstCells = splitCsvLine(nonEmptyLines[0].text, delimiter)
+  const lowerCells = firstCells.map((cell) => cell.toLowerCase())
+  const looksLikeHeader =
+    lowerCells.some((cell) => /serial|sn\b|device/.test(cell)) ||
+    lowerCells.some((cell) => /lat/.test(cell)) ||
+    lowerCells.some((cell) => /lon|lng/.test(cell))
+
+  if (looksLikeHeader) {
+    startIndex = 1
+    const foundSerial = lowerCells.findIndex((cell) => /serial|sn\b|device/.test(cell))
+    const foundLat = lowerCells.findIndex((cell) => /lat/.test(cell))
+    const foundLng = lowerCells.findIndex((cell) => /lon|lng/.test(cell))
+    if (foundSerial !== -1 && foundLat !== -1 && foundLng !== -1) {
+      serialIdx = foundSerial
+      latIdx = foundLat
+      lngIdx = foundLng
+    }
+  }
+
+  const rows: CsvLocationRow[] = []
+  for (let i = startIndex; i < nonEmptyLines.length; i++) {
+    const entry = nonEmptyLines[i]
+    const cells = splitCsvLine(entry.text, delimiter)
+    const serialNumber = (cells[serialIdx] ?? '').trim()
+    const rawLat = cells[latIdx]
+    const rawLng = cells[lngIdx]
+    const lat = parseCoordinateValue(rawLat, delimiter)
+    const lng = parseCoordinateValue(rawLng, delimiter)
+
+    const errors: string[] = []
+    if (!serialNumber) errors.push('Serial number kosong')
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90) errors.push('Latitude tidak valid (-90..90)')
+    if (!Number.isFinite(lng) || lng < -180 || lng > 180) errors.push('Longitude tidak valid (-180..180)')
+
+    const valid = errors.length === 0
+    rows.push({
+      line: entry.line,
+      serialNumber,
+      latitude: Number.isFinite(lat) ? lat : null,
+      longitude: Number.isFinite(lng) ? lng : null,
+      valid,
+      error: valid ? undefined : errors.join('; '),
+    })
+  }
+
+  return rows
+}
 
 function isDeviceOnline(lastInform?: string) {
   if (!lastInform) return false
@@ -482,6 +618,12 @@ export default function NetworkMap() {
   const [editingEdge, setEditingEdge] = useState(false)
   const [pendingDeleteNode, setPendingDeleteNode] = useState<MapNode | null>(null)
   const [pendingDeleteEdge, setPendingDeleteEdge] = useState<MapEdge | null>(null)
+  const [csvModalOpen, setCsvModalOpen] = useState(false)
+  const [csvFileName, setCsvFileName] = useState('')
+  const [csvRows, setCsvRows] = useState<CsvLocationRow[]>([])
+  const [csvImporting, setCsvImporting] = useState(false)
+  const [csvResult, setCsvResult] = useState<{ updated: number; notFound: string[]; invalidCount: number } | null>(null)
+  const csvInputRef = useRef<HTMLInputElement | null>(null)
   const [mapView, setMapView] = useState<'map' | 'list'>('map')
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const [mapCenter, setMapCenter] = useState<[number, number]>([-6.2088, 106.8456])
@@ -1010,6 +1152,81 @@ export default function NetworkMap() {
     }
   }
 
+  const validCsvCount = useMemo(() => csvRows.filter((row) => row.valid).length, [csvRows])
+  const invalidCsvCount = csvRows.length - validCsvCount
+
+  const openCsvModal = () => {
+    setCsvFileName('')
+    setCsvRows([])
+    setCsvResult(null)
+    if (csvInputRef.current) {
+      csvInputRef.current.value = ''
+    }
+    setCsvModalOpen(true)
+  }
+
+  const handleDownloadCsvTemplate = () => {
+    const blob = new Blob([`\uFEFF${CSV_TEMPLATE_CONTENT}`], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = 'template-koordinat-device.csv'
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleCsvFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    try {
+      const text = await file.text()
+      const parsed = parseLocationCsv(text)
+      setCsvFileName(file.name)
+      setCsvRows(parsed)
+      setCsvResult(null)
+      if (parsed.length === 0) {
+        toast.error('File CSV kosong atau tidak memiliki baris data')
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Gagal membaca file CSV')
+    }
+  }
+
+  const handleImportCsv = async () => {
+    const validItems = csvRows
+      .filter((row): row is CsvLocationRow & { latitude: number; longitude: number } =>
+        row.valid && row.latitude !== null && row.longitude !== null
+      )
+      .map((row) => ({
+        serialNumber: row.serialNumber,
+        latitude: row.latitude,
+        longitude: row.longitude,
+      }))
+
+    if (validItems.length === 0) {
+      toast.error('Tidak ada baris koordinat valid untuk disimpan')
+      return
+    }
+
+    setCsvImporting(true)
+    try {
+      const response = await devicesAPI.bulkUpdateLocations(validItems)
+      if (!response.success || !response.data) {
+        throw new Error(response.message || 'Gagal mengimpor koordinat CSV')
+      }
+      const result = response.data
+      setCsvResult(result)
+      toast.success(`${result.updated} koordinat perangkat berhasil disimpan`)
+      await loadData(false)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Gagal mengimpor koordinat CSV')
+    } finally {
+      setCsvImporting(false)
+    }
+  }
+
   const nodeCounts = useMemo(() => NODE_TYPES.map((type) => ({
     ...type, count: nodes.filter((node) => node.type === type.value).length
   })), [nodes])
@@ -1038,6 +1255,12 @@ export default function NetworkMap() {
               <Button type="button" variant="outline" size="sm" onClick={openNewEdge}>
                 <Icon name="signal" size={16} />
                 Draw cable
+              </Button>
+            )}
+            {isAdmin && (
+              <Button type="button" variant="outline" size="sm" onClick={openCsvModal}>
+                <Icon name="pin" size={16} />
+                Upload CSV Lokasi
               </Button>
             )}
             <Button type="button" variant="outline" size="sm" disabled={loading} onClick={() => void loadData(false)}>
@@ -1485,6 +1708,142 @@ export default function NetworkMap() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        <Dialog open={csvModalOpen} onOpenChange={(open) => { if (!csvImporting) setCsvModalOpen(open) }}>
+          <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Import CSV Koordinat Perangkat</DialogTitle>
+              <DialogDescription>
+                Unggah file `.csv` dengan kolom `Serial Number`, `Latitude`, dan `Longitude` (mendukung pemisah `,` atau `;`). Baris header dilewati otomatis.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <Field className="flex-1">
+                  <FieldLabel htmlFor="csv-location-file">File CSV Koordinat</FieldLabel>
+                  <Input
+                    ref={csvInputRef}
+                    id="csv-location-file"
+                    type="file"
+                    accept=".csv,text/csv"
+                    disabled={csvImporting}
+                    onChange={(e) => void handleCsvFileChange(e)}
+                  />
+                </Field>
+                <Button type="button" variant="outline" size="sm" onClick={handleDownloadCsvTemplate}>
+                  <Icon name="database" size={16} />
+                  Download Template CSV
+                </Button>
+              </div>
+
+              {csvFileName && (
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <Badge variant="outline" className="font-mono">{csvFileName}</Badge>
+                  <Badge variant="secondary">Total: {csvRows.length} baris</Badge>
+                  <Badge
+                    variant="outline"
+                    className="border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                  >
+                    Valid: {validCsvCount}
+                  </Badge>
+                  {invalidCsvCount > 0 && (
+                    <Badge variant="destructive">Invalid: {invalidCsvCount}</Badge>
+                  )}
+                </div>
+              )}
+
+              {csvResult && (
+                <Alert variant={csvResult.updated > 0 ? 'default' : 'destructive'}>
+                  <Icon name={csvResult.updated > 0 ? 'check' : 'warning'} size={16} />
+                  <AlertDescription className="space-y-1.5">
+                    <p>
+                      <strong>{csvResult.updated}</strong> koordinat perangkat berhasil disimpan.
+                      {csvResult.invalidCount > 0 ? ` ${csvResult.invalidCount} baris tidak valid dilewati.` : ''}
+                    </p>
+                    {csvResult.notFound.length > 0 && (
+                      <p className="text-xs text-amber-700 dark:text-amber-300">
+                        Serial number tidak ditemukan ({csvResult.notFound.length}):{' '}
+                        <span className="font-mono">
+                          {csvResult.notFound.slice(0, 20).join(', ')}
+                          {csvResult.notFound.length > 20 ? `, +${csvResult.notFound.length - 20} lainnya` : ''}
+                        </span>
+                      </p>
+                    )}
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {csvRows.length > 0 && (
+                <div className="space-y-2">
+                  <div className="max-h-64 overflow-auto rounded-lg border border-border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-16">Baris</TableHead>
+                          <TableHead>Serial Number</TableHead>
+                          <TableHead>Latitude</TableHead>
+                          <TableHead>Longitude</TableHead>
+                          <TableHead>Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {csvRows.slice(0, 500).map((row) => (
+                          <TableRow key={`${row.line}-${row.serialNumber}`}>
+                            <TableCell className="font-mono text-xs text-muted-foreground">{row.line}</TableCell>
+                            <TableCell className="font-mono text-xs">{row.serialNumber || '—'}</TableCell>
+                            <TableCell className="font-mono text-xs">
+                              {row.latitude !== null ? row.latitude.toFixed(6) : '—'}
+                            </TableCell>
+                            <TableCell className="font-mono text-xs">
+                              {row.longitude !== null ? row.longitude.toFixed(6) : '—'}
+                            </TableCell>
+                            <TableCell>
+                              {row.valid ? (
+                                <Badge
+                                  variant="outline"
+                                  className="border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                                >
+                                  Valid
+                                </Badge>
+                              ) : (
+                                <Badge variant="destructive">{row.error || 'Tidak valid'}</Badge>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  {csvRows.length > 500 && (
+                    <p className="text-xs text-muted-foreground">
+                      Menampilkan 500 baris pertama dari {csvRows.length} baris di preview. Seluruh {validCsvCount} baris valid tetap akan diproses saat disimpan.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={csvImporting}
+                onClick={() => setCsvModalOpen(false)}
+              >
+                Tutup
+              </Button>
+              <Button
+                type="button"
+                disabled={csvImporting || validCsvCount === 0}
+                onClick={() => void handleImportCsv()}
+              >
+                {csvImporting ? <Spinner data-icon="inline-start" /> : <Icon name="check" size={16} />}
+                Simpan Koordinat{validCsvCount > 0 ? ` (${validCsvCount})` : ''}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   )

@@ -75,6 +75,56 @@ class DeviceProfile {
     }
     return this.getByDeviceId(deviceId);
   }
+
+  static async bulkUpsertLocations(entries) {
+    if (!Array.isArray(entries) || entries.length === 0) {
+      return 0;
+    }
+
+    const db = getDb();
+    const now = new Date();
+    const deviceIds = entries.map((entry) => entry.deviceId);
+    const existingSet = new Set();
+
+    await db.transaction(async (trx) => {
+      for (let i = 0; i < deviceIds.length; i += 500) {
+        const slice = deviceIds.slice(i, i + 500);
+        const rows = await trx('device_profiles')
+          .select('device_id')
+          .whereIn('device_id', slice);
+        rows.forEach((row) => existingSet.add(row.device_id));
+      }
+
+      const toInsert = [];
+      for (const entry of entries) {
+        const latitude = Number(entry.latitude);
+        const longitude = Number(entry.longitude);
+        if (existingSet.has(entry.deviceId)) {
+          await trx('device_profiles')
+            .where({ device_id: entry.deviceId })
+            .update({
+              latitude,
+              longitude,
+              updated_at: now
+            });
+        } else {
+          toInsert.push({
+            device_id: entry.deviceId,
+            latitude,
+            longitude,
+            created_at: now,
+            updated_at: now
+          });
+        }
+      }
+
+      for (let i = 0; i < toInsert.length; i += 100) {
+        await trx('device_profiles').insert(toInsert.slice(i, i + 100));
+      }
+    });
+
+    return entries.length;
+  }
 }
 
 export default DeviceProfile;
